@@ -1,0 +1,20 @@
+This repository is an independent project and is not affiliated with or
+endorsed by evdev/hubitat-modern-dashboard or Hubitat Inc.
+
+Several small, purely mechanical Groovy patterns for interacting with the
+Hubitat platform — specifically the internal self-hosted-HTTP-call pattern
+(an App fetching a resource from its own hub via `httpGet` to a local URL)
+and the defensive HTTP response body reader (`readHttpBody`) — were adapted
+from:
+
+    evdev/hubitat-modern-dashboard
+    https://github.com/evdev/hubitat-modern-dashboard
+    Copyright the project's contributors
+    Licensed under the Apache License, Version 2.0
+    https://www.apache.org/licenses/LICENSE-2.0
+
+See that project's LICENSE for the full license text. This NOTICE exists to
+credit those specific adapted patterns, not to claim any broader
+relationship between the two projects — this repo's actual purpose (wrapping
+Maker API from a proxying App) is a different architecture than that
+project's (direct in-process device access with no Maker API dependency).
