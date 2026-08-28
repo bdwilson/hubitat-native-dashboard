@@ -1,6 +1,6 @@
 # Hubitat Native Dashboard — spike
 
-**Proof of concept. Not a working dashboard, and not tested on a real hub yet.**
+**Proof of concept. Not a working dashboard. Core mechanism (Maker API proxy → device listing) confirmed working on a real hub; command proxying and the cloud URL not yet confirmed.**
 
 This repo exists to answer one question:
 
@@ -47,16 +47,16 @@ You need a Maker API instance first. If you already run one (for Alexa, HomeBrid
 
 ## What to check when testing
 
-This has never run on real hardware. When you try it, these are the interesting failure points, roughly in the order they'd bite:
+These are the interesting failure points, roughly in the order they'd bite:
 
-| Check | What it tells us |
-|---|---|
-| Does the app **save** in Apps Code without a compile error? | Groovy syntax is valid |
-| Does the app page show Local/Cloud links? | OAuth + `createAccessToken()` worked |
-| Does the **local** link load the page? | `mappings`/`render` routing works |
-| Does it list devices? | **The core question** — internal `httpGet` to Maker API on the hub's own LAN IP works |
-| Does toggling a switch work? | Command proxying works |
-| Does the **cloud** link do all of the above? | Hubitat's cloud OAuth proxy passes through correctly |
+| Check | What it tells us | Status |
+|---|---|---|
+| Does the app **save** in Apps Code without a compile error? | Groovy syntax is valid | ✅ confirmed |
+| Does the app page show Local/Cloud links? | OAuth + `createAccessToken()` worked | ✅ confirmed |
+| Does the **local** link load the page? | `mappings`/`render` routing works | ✅ confirmed |
+| Does it list devices? | **The core question** — internal `httpGet` to Maker API on `127.0.0.1:8080` works | ✅ confirmed — loaded 141 devices |
+| Does toggling a switch work? | Command proxying works | not yet confirmed |
+| Does the **cloud** link do all of the above? | Hubitat's cloud OAuth proxy passes through correctly | not yet confirmed |
 
 If the device list fails, **Logs** in the Hubitat admin UI (filtered to this app) will have the error — `makerApiGet` logs failures with the message. Issues already found and fixed during real-hub testing (see commit history):
 - The embedded test page originally used root-relative fetch URLs (`/devices/all`, `/cmd`), which resolve against the hub's origin root instead of this app's own base path — fixed by making them path-relative.
@@ -93,7 +93,7 @@ These apply to *any* on-hub dashboard, including this one — they're documented
 
 ## Status
 
-In real-hub testing. A compile error, a root-relative-URL bug, and a self-call wrong-port bug (needed `127.0.0.1:8080`, not port 80) have been found and fixed so far (see commit history). Device listing has not yet been confirmed working end-to-end.
+**Core mechanism confirmed on a real hub: the app proxied Maker API and listed 141 real devices.** A compile error, a root-relative-URL bug, and a self-call wrong-port bug (needed `127.0.0.1:8080`, not port 80) were found and fixed along the way (see commit history). Still to confirm: toggling a device (command proxying) and the cloud dashboard link.
 
 ## Credits
 
