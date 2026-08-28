@@ -1,6 +1,6 @@
 # Hubitat Native Dashboard — spike
 
-**Proof of concept. Not a working dashboard. Core mechanism (Maker API proxy → device listing) confirmed working on a real hub; command proxying and the cloud URL not yet confirmed.**
+**Proof of concept — not a real dashboard, but the core mechanism is now confirmed working end-to-end on a real hub: device listing, command proxying, and the cloud URL all work.**
 
 This repo exists to answer one question:
 
@@ -55,14 +55,15 @@ These are the interesting failure points, roughly in the order they'd bite:
 | Does the app page show Local/Cloud links? | OAuth + `createAccessToken()` worked | ✅ confirmed |
 | Does the **local** link load the page? | `mappings`/`render` routing works | ✅ confirmed |
 | Does it list devices? | **The core question** — internal `httpGet` to Maker API on `127.0.0.1:8080` works | ✅ confirmed — loaded 141 devices |
-| Does toggling a switch work? | Command proxying works | fix just applied, not yet re-tested |
-| Does the **cloud** link do all of the above? | Hubitat's cloud OAuth proxy passes through correctly | fix just applied, not yet re-tested |
+| Does toggling a switch work? | Command proxying works | ✅ confirmed |
+| Does the **cloud** link do all of the above? | Hubitat's cloud OAuth proxy passes through correctly | ✅ confirmed |
 
 If the device list fails, **Logs** in the Hubitat admin UI (filtered to this app) will have the error — `makerApiGet` logs failures with the message. Issues already found and fixed during real-hub testing (see commit history):
 - The embedded test page originally used root-relative fetch URLs (`/devices/all`, `/cmd`), which resolve against the hub's origin root instead of this app's own base path — fixed by making them path-relative.
 - Self-calls need port **8080**, not port 80/443. Two wrong attempts confirmed this: plain `127.0.0.1` (port 80) and `location.hub.localIP` (port 80) both fail with connection refused. Port 80/443 fronts the hub's admin/browser-facing web server; the internal app engine that serves `/apps/api/...` to the hub calling itself listens on 8080/8443. Fixed by using `127.0.0.1:8080`. This matches evdev/hubitat-modern-dashboard's own `hubLoginUri()` (`http://127.0.0.1:8080`), confirmed by reading their actual source.
 - The **cloud** dashboard link returned AWS API Gateway's generic `{"message":"Missing Authentication Token"}` (its standard "no matching route" response) — caused by the link pointing at the bare root `/` instead of `/dashboard`. evdev's own dashboard-link builder always uses `/dashboard`, never a bare-root link, even though its `mappings` block maps both. Fixed by switching both dashboard links and the `mappings` entry to `/dashboard`.
 - **No device ever showed a toggle button, even though 141 devices loaded.** Maker API's `/devices/all` returns `attributes` as a flat object keyed by name (`{"switch":"off"}`), not an array of `{name, currentValue}` objects — the test page's `getAttr()` assumed the array shape, so every lookup silently returned `undefined` and no device was ever detected as having a `switch`. Fixed by reading `device.attributes[name]` directly.
+- **Buttons worked but never showed the new state (or toggled the same direction twice) without a full page reload.** Each button's on/off label and click handler closed over the device list from the last `load()` call; `sendCommand()` never re-fetched or re-rendered after a command succeeded. Fixed by having `sendCommand()` call `load()` again on success, so the device list (and every button) reflects the hub's actual current state after each command.
 
 If the device list still fails after these fixes, the most likely remaining culprit is the Maker API App ID/token being wrong.
 
@@ -95,7 +96,7 @@ These apply to *any* on-hub dashboard, including this one — they're documented
 
 ## Status
 
-**Core mechanism confirmed on a real hub: the app proxied Maker API and listed 141 real devices.** A compile error, a root-relative-URL bug, a self-call wrong-port bug, a cloud-link wrong-path bug, and a Maker API attributes-shape bug (no toggle buttons ever rendered) were found and fixed along the way (see commit history). Still to confirm: toggling a device and the cloud dashboard link, with the latest fixes applied.
+**All core checks confirmed working on a real hub**, local and cloud both: device listing (141 real devices), command proxying (toggling a switch), and the cloud dashboard link. Several bugs were found and fixed along the way — a compile error, a root-relative-URL bug, a self-call wrong-port bug, a cloud-link wrong-path bug, a Maker API attributes-shape bug, and a stale-UI-after-command bug (see commit history for each). The spike's core question is answered: yes, a native Hubitat App can proxy an existing Maker API instance to serve a working dashboard entirely from the hub.
 
 ## Credits
 

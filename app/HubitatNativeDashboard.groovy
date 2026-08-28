@@ -270,6 +270,10 @@ private String indexHtml() {
       const body = await r.json();
       if (body && body.error) throw new Error(body.error);
       setStatus('Sent "' + cmd + '" to device ' + id, true);
+      // Buttons capture on/off state at render time (a closure over the
+      // device list from the last load()), so nothing on the page reflects
+      // the new state until the list is re-fetched and re-rendered.
+      await load();
     } catch (e) {
       setStatus('Command failed: ' + e.message, false);
     }
