@@ -117,7 +117,7 @@ mappings {
 }
 
 def renderIndex() {
-    render contentType: "text/html", data: INDEX_HTML, status: 200
+    render contentType: "text/html", data: indexHtml(), status: 200
 }
 
 def proxyDevicesAll() {
@@ -184,8 +184,15 @@ private String readHttpBody(data) {
 // Minimal test page — proves the mechanism (OAuth-gated page, device list
 // via the Maker API proxy, on/off commands via the proxy). Not a real
 // dashboard UI; deliberately small so failures are easy to isolate.
+//
+// This is a method (not a top-level "private static final" field) because
+// Hubitat compiles app code as a Groovy script, not a class — modifiers
+// like private/static are not valid on top-level declarations there
+// ("Modifier 'private' not allowed here"). A method returning the string
+// is the working equivalent.
 // ---------------------------------------------------------------------------
-private static final String INDEX_HTML = '''<!doctype html>
+private String indexHtml() {
+    '''<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -282,3 +289,4 @@ private static final String INDEX_HTML = '''<!doctype html>
 </body>
 </html>
 '''
+}
