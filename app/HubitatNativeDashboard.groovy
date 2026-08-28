@@ -25,6 +25,12 @@
 //      click Done.
 //   6. Reopen this app's page for the Local/Cloud dashboard links.
 
+// importUrl below points at this repo's current working branch
+// (claude/modifier-syntax-error-188-lkzmfi), not main, since that's what's
+// actively being updated during this spike's real-hub testing. Requires
+// the repo to be public — Hubitat's Import button does a plain
+// unauthenticated fetch of the raw URL. Update this to point at main once
+// the branch merges.
 definition(
     name: "Hubitat Native Dashboard (spike)",
     namespace: "bdwilson",
@@ -33,6 +39,7 @@ definition(
     category: "My Apps",
     iconUrl: "",
     iconX2Url: "",
+    importUrl: "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/claude/modifier-syntax-error-188-lkzmfi/app/HubitatNativeDashboard.groovy",
     oauth: [displayName: "Hubitat Native Dashboard (spike)", displayLink: ""]
 )
 
