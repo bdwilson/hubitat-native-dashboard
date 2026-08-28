@@ -87,12 +87,20 @@ def initialize() {
 // URL helpers
 // ---------------------------------------------------------------------------
 
+// Both links point at "/dashboard", not the bare root "/". evdev/hubitat-
+// modern-dashboard's own dashboardUrl() builder does the same
+// ("${base}/dashboard?access_token=...") even though its mappings block
+// also (redundantly) maps "/" — "/dashboard" is what its real, shipping
+// cloud links actually use. This spike's cloud link 403'd with AWS API
+// Gateway's "Missing Authentication Token" (its generic no-matching-route
+// response) when pointed at bare "/"; switching to "/dashboard" to match
+// the precedent that's actually exercised in production.
 private String localDashboardUrl() {
-    "${getFullLocalApiServerUrl()}/?access_token=${state.accessToken}"
+    "${getFullLocalApiServerUrl()}/dashboard?access_token=${state.accessToken}"
 }
 
 private String cloudDashboardUrl() {
-    "${getFullApiServerUrl()}/?access_token=${state.accessToken}"
+    "${getFullApiServerUrl()}/dashboard?access_token=${state.accessToken}"
 }
 
 // Internal call to this hub's own Maker API instance — the same mechanism
@@ -121,6 +129,7 @@ private String makerApiLocalBase() {
 // ---------------------------------------------------------------------------
 mappings {
     path("/")            { action: [GET: "renderIndex"] }
+    path("/dashboard")   { action: [GET: "renderIndex"] }
     path("/devices/all") { action: [GET: "proxyDevicesAll"] }
     path("/cmd")          { action: [GET: "proxyCommand"] }
 }
@@ -244,10 +253,15 @@ private String indexHtml() {
     el.className = ok ? 'ok' : 'err';
   }
 
+  // Maker API's /devices/all returns "attributes" as a flat object keyed by
+  // attribute name (e.g. {"switch":"off"}), not an array of {name,
+  // currentValue} objects — confirmed against community-documented example
+  // responses. Handles a {value: ...}-wrapped shape too, just in case.
   function getAttr(device, name) {
-    if (!Array.isArray(device.attributes)) return undefined;
-    const a = device.attributes.find(x => x.name === name);
-    return a ? a.currentValue : undefined;
+    if (!device.attributes || typeof device.attributes !== 'object') return undefined;
+    const v = device.attributes[name];
+    if (v && typeof v === 'object' && 'value' in v) return v.value;
+    return v;
   }
 
   async function sendCommand(id, cmd) {

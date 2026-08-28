@@ -78,6 +78,8 @@ Use these exact patterns rather than inventing syntax from general Hubitat knowl
   }
   ```
   evdev's own project uses `GET /cmd?id=…&c=…&v=…` rather than `/devices/:id/:command`-style path variables, even though their *internal* Maker-API-style shape would have supported it. This spike follows the same static-path-plus-query-param convention deliberately, since it's the one with actual precedent in shipped code — path-variable mapping syntax (`path("/devices/:id")`) has **not** been verified here and should not be assumed to work without testing.
+
+  **The dashboard entry point specifically must be `/dashboard`, not the bare root `/`.** evdev's project maps both, but its own `dashboardUrl()` builder — the one that generates the actual links shown to users — only ever produces `"${base}/dashboard?access_token=..."`, never a bare-root link. This spike originally used bare `/` for its dashboard link and got AWS API Gateway's generic "Missing Authentication Token" (its standard no-matching-route response) when opening the **cloud** link on a real hub — local worked fine regardless, since local routing doesn't go through API Gateway. Fixed by switching both `localDashboardUrl()`/`cloudDashboardUrl()` and the corresponding `mappings` entry to `/dashboard` (bare `/` is still mapped too, matching evdev's belt-and-suspenders pattern, just no longer what the generated links use).
 - **Internal self-calls (the core mechanism this spike relies on)**:
   ```groovy
   httpGet([uri: uri, contentType: "text/plain", textParser: true, timeout: 30, ignoreSSLIssues: true]) { resp ->
@@ -105,6 +107,7 @@ Use these exact patterns rather than inventing syntax from general Hubitat knowl
   Reuse this verbatim rather than assuming `resp.data.toString()` is safe.
 - **`render` syntax**: `render contentType: "application/json", data: jsonString, status: 200, headers: [...]` — a named-parameter call, not a builder/DSL block.
 - **Binary assets**: base64-encode as text (`.b64` files), decode server-side (`bytes.decodeBase64()`), `render contentType: "image/png", data: new String(bytes, "ISO-8859-1"), status: 200`. Do not attempt to proxy raw binary bytes through Hubitat Cloud — corrupts.
+- **Maker API's `GET /devices/all` returns `attributes` as a flat object keyed by attribute name** — `{"switch": "off", ...}` — **not** an array of `{name, currentValue}` objects. Confirmed against community-documented example responses (this spike's first pass assumed the array shape, which meant every `getAttr()` lookup silently returned `undefined` and no device ever appeared controllable — no runtime error, just nothing worked). `GET /devices/{id}` (single device) may format attributes differently than `/devices/all` — this has been reported as an inconsistency in Maker API itself, not verified further here since this spike only uses `/devices/all`.
 
 ## What is NOT yet verified
 
