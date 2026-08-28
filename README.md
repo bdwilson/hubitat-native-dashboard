@@ -10,12 +10,12 @@ It is deliberately separate from [bdwilson/cf-hubitat-dashboard](https://github.
 
 ## The idea
 
-A Hubitat App can make HTTP calls to any URL — including its own hub, on localhost. So instead of reimplementing device access, capability detection, and command dispatch in Groovy from scratch, this App acts as a **thin proxy** in front of an existing Maker API instance:
+A Hubitat App can make HTTP calls to any URL — including its own hub, on its LAN IP. So instead of reimplementing device access, capability detection, and command dispatch in Groovy from scratch, this App acts as a **thin proxy** in front of an existing Maker API instance:
 
 ```
 Browser ──OAuth token──► This App (on the hub)
                               │
-                              └──httpGet 127.0.0.1──► Maker API (same hub)
+                              └──httpGet hub LAN IP──► Maker API (same hub)
                                                           │
                                                           └──► your devices
 ```
@@ -54,11 +54,15 @@ This has never run on real hardware. When you try it, these are the interesting 
 | Does the app **save** in Apps Code without a compile error? | Groovy syntax is valid |
 | Does the app page show Local/Cloud links? | OAuth + `createAccessToken()` worked |
 | Does the **local** link load the page? | `mappings`/`render` routing works |
-| Does it list devices? | **The core question** — internal `httpGet` to Maker API on `127.0.0.1` works |
+| Does it list devices? | **The core question** — internal `httpGet` to Maker API on the hub's own LAN IP works |
 | Does toggling a switch work? | Command proxying works |
 | Does the **cloud** link do all of the above? | Hubitat's cloud OAuth proxy passes through correctly |
 
-If the device list fails, **Logs** in the Hubitat admin UI (filtered to this app) will have the error — `makerApiGet` logs failures with the message. The most likely culprits are the Maker API App ID/token being wrong, or `127.0.0.1` not being reachable the way this assumes (in which case the fix is probably using the hub's LAN IP instead — worth trying before concluding the approach fails).
+If the device list fails, **Logs** in the Hubitat admin UI (filtered to this app) will have the error — `makerApiGet` logs failures with the message. Two issues already found and fixed during real-hub testing (see commit history):
+- The embedded test page originally used root-relative fetch URLs (`/devices/all`, `/cmd`), which resolve against the hub's origin root instead of this app's own base path — fixed by making them path-relative.
+- `127.0.0.1` is **not** reachable from app code on a real hub — `httpGet` to it fails with connection refused. Fixed by calling `location.hub.localIP` instead.
+
+If the device list still fails after these fixes, the most likely remaining culprit is the Maker API App ID/token being wrong.
 
 ## Trade-offs of this approach
 
@@ -89,7 +93,7 @@ These apply to *any* on-hub dashboard, including this one — they're documented
 
 ## Status
 
-Written, not yet run. Next step is a real-hub test against the checks above.
+In real-hub testing. Compile error, a root-relative-URL bug, and a `127.0.0.1`-unreachable bug have been found and fixed so far (see commit history). Device listing has not yet been confirmed working end-to-end.
 
 ## Credits
 

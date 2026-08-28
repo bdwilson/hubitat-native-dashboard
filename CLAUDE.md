@@ -27,9 +27,11 @@ The production dashboard (cf-hubitat-dashboard) requires a Cloudflare account, a
 
 ## The core idea this spike tests: wrap Maker API instead of reimplementing device access
 
-A Hubitat App can `httpGet` any URL, including the hub's own Maker API endpoint on localhost — mechanically identical to what evdev's project already proves works (its `fetchLocalAssetUncached()` does `httpGet` to `${hubBaseUri()}/local/<file>`, the hub calling itself). So instead of rebuilding device access, capability detection, and command dispatch from scratch in Groovy (evdev's approach), this spike's App can be a **thin proxy** in front of an existing, separately-configured Maker API instance:
+A Hubitat App can `httpGet` any URL, including the hub's own Maker API endpoint on its LAN IP — mechanically identical to what evdev's project already proves works (its `fetchLocalAssetUncached()` does `httpGet` to `${hubBaseUri()}/local/<file>`, the hub calling itself). So instead of rebuilding device access, capability detection, and command dispatch from scratch in Groovy (evdev's approach), this spike's App can be a **thin proxy** in front of an existing, separately-configured Maker API instance:
 
-- `GET /devices/all` on this App → internally `httpGet`s `http://127.0.0.1/apps/api/{makerApiAppId}/devices/all?access_token={makerApiToken}` → relays the JSON straight through.
+- `GET /devices/all` on this App → internally `httpGet`s `http://{location.hub.localIP}/apps/api/{makerApiAppId}/devices/all?access_token={makerApiToken}` → relays the JSON straight through.
+
+  **Confirmed on real hardware:** `127.0.0.1` is not reachable from app code — `httpGet` to it fails with connection refused. Must use `location.hub.localIP` (the hub's actual LAN IP) instead. This was the original assumption in this section and it was wrong; corrected after real-hub testing.
 - Commands → same idea, proxied to Maker API's own command endpoint shape.
 
 ### Why this fits cf-hubitat-dashboard's design specifically (even though this repo doesn't touch that code)

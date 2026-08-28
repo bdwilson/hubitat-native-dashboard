@@ -2,7 +2,7 @@
 //
 // PROOF OF CONCEPT. Not a real dashboard. Validates one question: can a
 // native, OAuth-enabled Hubitat App proxy an existing Maker API instance
-// (internal httpGet to 127.0.0.1) and serve a minimal browser UI entirely
+// (internal httpGet to its own LAN IP) and serve a minimal browser UI entirely
 // from the hub, with no external hosting at all?
 //
 // Standalone spike — deliberately NOT wired into
@@ -95,13 +95,17 @@ private String cloudDashboardUrl() {
     "${getFullApiServerUrl()}/?access_token=${state.accessToken}"
 }
 
-// Internal call to this hub's own Maker API instance, on localhost — the
-// same mechanism evdev/hubitat-modern-dashboard uses to read its own File
-// Manager assets (an App calling its own hub over HTTP), just pointed at
-// Maker API instead of /local/. See CLAUDE.md's "Verified Hubitat/Groovy
-// patterns" section for where this pattern was confirmed.
+// Internal call to this hub's own Maker API instance — the same mechanism
+// evdev/hubitat-modern-dashboard uses to read its own File Manager assets
+// (an App calling its own hub over HTTP), just pointed at Maker API instead
+// of /local/. See CLAUDE.md's "Verified Hubitat/Groovy patterns" section
+// for where this pattern was confirmed.
+//
+// Uses the hub's LAN IP (location.hub.localIP), not 127.0.0.1 — real-hub
+// testing showed 127.0.0.1:80 gets connection refused from app code, so
+// loopback isn't reachable the way this originally assumed.
 private String makerApiLocalBase() {
-    "http://127.0.0.1/apps/api/${makerApiAppId}"
+    "http://${location.hub.localIP}/apps/api/${makerApiAppId}"
 }
 
 // ---------------------------------------------------------------------------
