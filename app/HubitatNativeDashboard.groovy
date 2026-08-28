@@ -221,6 +221,11 @@ private String indexHtml() {
 <script>
 (() => {
   'use strict';
+  // Fetch paths below are deliberately path-relative (no leading "/"): this
+  // page is served at .../apps/api/<appId>/ (local) or .../apps/<appId>/
+  // (cloud), and a root-relative fetch would resolve against the hub's
+  // origin root instead of that app base, missing this app's mappings
+  // entirely and hitting something else on the hub instead.
   const token = new URLSearchParams(location.search).get('access_token') || '';
   const q = token ? ('?access_token=' + encodeURIComponent(token)) : '';
 
@@ -238,7 +243,7 @@ private String indexHtml() {
 
   async function sendCommand(id, cmd) {
     try {
-      const r = await fetch('/cmd?id=' + encodeURIComponent(id) + '&c=' + encodeURIComponent(cmd) + '&access_token=' + encodeURIComponent(token));
+      const r = await fetch('cmd?id=' + encodeURIComponent(id) + '&c=' + encodeURIComponent(cmd) + '&access_token=' + encodeURIComponent(token));
       const body = await r.json();
       if (body && body.error) throw new Error(body.error);
       setStatus('Sent "' + cmd + '" to device ' + id, true);
@@ -272,7 +277,7 @@ private String indexHtml() {
   async function load() {
     if (!token) { setStatus('No access_token in URL — open this page from the app\\'s own link.', false); return; }
     try {
-      const r = await fetch('/devices/all' + q);
+      const r = await fetch('devices/all' + q);
       const body = await r.json();
       if (body && body.error) throw new Error(body.error);
       if (!Array.isArray(body)) throw new Error('Unexpected response shape — got: ' + JSON.stringify(body).slice(0, 200));
