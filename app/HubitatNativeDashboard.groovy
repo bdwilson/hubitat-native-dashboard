@@ -2,7 +2,7 @@
 //
 // PROOF OF CONCEPT. Not a real dashboard. Validates one question: can a
 // native, OAuth-enabled Hubitat App proxy an existing Maker API instance
-// (internal httpGet to its own LAN IP) and serve a minimal browser UI entirely
+// (internal httpGet to its own 127.0.0.1:8080) and serve a minimal browser UI entirely
 // from the hub, with no external hosting at all?
 //
 // Standalone spike — deliberately NOT wired into
@@ -101,11 +101,16 @@ private String cloudDashboardUrl() {
 // of /local/. See CLAUDE.md's "Verified Hubitat/Groovy patterns" section
 // for where this pattern was confirmed.
 //
-// Uses the hub's LAN IP (location.hub.localIP), not 127.0.0.1 — real-hub
-// testing showed 127.0.0.1:80 gets connection refused from app code, so
-// loopback isn't reachable the way this originally assumed.
+// Uses 127.0.0.1:8080 — real-hub testing showed both plain 127.0.0.1 (port
+// 80) and location.hub.localIP (port 80) get connection refused from app
+// code. Port 80/443 fronts the hub's admin/browser-facing web server; the
+// internal app engine that serves /apps/api/... to the hub calling itself
+// listens on 8080/8443. Confirmed against the Hubitat community's own
+// documented convention for this (thebearmay/hubitat's endpoints
+// reference: "use ports 8080 and 8443 and IP 127.0.0.1 if calling hub
+// from itself" — https://raw.githubusercontent.com/thebearmay/hubitat/main/libraries/endpoints.txt).
 private String makerApiLocalBase() {
-    "http://${location.hub.localIP}/apps/api/${makerApiAppId}"
+    "http://127.0.0.1:8080/apps/api/${makerApiAppId}"
 }
 
 // ---------------------------------------------------------------------------

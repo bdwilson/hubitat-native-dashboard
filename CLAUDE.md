@@ -27,11 +27,11 @@ The production dashboard (cf-hubitat-dashboard) requires a Cloudflare account, a
 
 ## The core idea this spike tests: wrap Maker API instead of reimplementing device access
 
-A Hubitat App can `httpGet` any URL, including the hub's own Maker API endpoint on its LAN IP — mechanically identical to what evdev's project already proves works (its `fetchLocalAssetUncached()` does `httpGet` to `${hubBaseUri()}/local/<file>`, the hub calling itself). So instead of rebuilding device access, capability detection, and command dispatch from scratch in Groovy (evdev's approach), this spike's App can be a **thin proxy** in front of an existing, separately-configured Maker API instance:
+A Hubitat App can `httpGet` any URL, including the hub's own Maker API endpoint on `127.0.0.1:8080` — mechanically identical to what evdev's project already proves works (its `fetchLocalAssetUncached()` does `httpGet` to `${hubBaseUri()}/local/<file>`, the hub calling itself). So instead of rebuilding device access, capability detection, and command dispatch from scratch in Groovy (evdev's approach), this spike's App can be a **thin proxy** in front of an existing, separately-configured Maker API instance:
 
-- `GET /devices/all` on this App → internally `httpGet`s `http://{location.hub.localIP}/apps/api/{makerApiAppId}/devices/all?access_token={makerApiToken}` → relays the JSON straight through.
+- `GET /devices/all` on this App → internally `httpGet`s `http://127.0.0.1:8080/apps/api/{makerApiAppId}/devices/all?access_token={makerApiToken}` → relays the JSON straight through.
 
-  **Confirmed on real hardware:** `127.0.0.1` is not reachable from app code — `httpGet` to it fails with connection refused. Must use `location.hub.localIP` (the hub's actual LAN IP) instead. This was the original assumption in this section and it was wrong; corrected after real-hub testing.
+  **Confirmed on real hardware, after two wrong attempts:** plain `127.0.0.1` (port 80) and `location.hub.localIP` (port 80) both fail with connection refused from app code. The fix is `127.0.0.1:8080` — port 80/443 fronts the hub's admin/browser-facing web server, while the internal app engine that serves `/apps/api/...` to the hub calling itself listens on 8080/8443. This matches the Hubitat community's own documented convention for hub self-calls (thebearmay/hubitat's `endpoints.txt`: "use ports 8080 and 8443 and IP 127.0.0.1 if calling hub from itself").
 - Commands → same idea, proxied to Maker API's own command endpoint shape.
 
 ### Why this fits cf-hubitat-dashboard's design specifically (even though this repo doesn't touch that code)
@@ -64,6 +64,12 @@ Use these exact patterns rather than inventing syntax from general Hubitat knowl
   ```
 - **`preferences { page(...) }` + `dynamicPage`**: standard `mainPage()` function returning `dynamicPage(name: "mainPage", install: true, uninstall: true) { section("...") { ... } }`. `createAccessToken()` is called unconditionally near the top of `mainPage()` (not wrapped defensively) once OAuth is enabled on the app.
 - **URL helpers**: `getFullLocalApiServerUrl()` and `getFullApiServerUrl()` are real, used methods for building local/cloud dashboard links.
+- **Hub self-calls use port 8080, not 80/443**: evdev's project defines two distinct helpers —
+  ```groovy
+  def hubBaseUri()  { return "http://${location.hub.localIP}:8080" }
+  def hubLoginUri() { return "http://127.0.0.1:8080" }
+  ```
+  `hubBaseUri()` (LAN IP) is used for fetching File Manager assets; `hubLoginUri()` (loopback) is used for hub-local login. Both hardcode port **8080** — port 80/443 fronts the hub's admin/browser-facing web server, while the internal app engine that serves local endpoints (File Manager, `/apps/api/...`) to the hub calling itself listens on 8080/8443. This spike originally missed the port entirely (tried plain `127.0.0.1` and `location.hub.localIP`, both on the implicit port 80) and got connection refused on real hardware both times; confirmed fixed by switching to `127.0.0.1:8080`, matching `hubLoginUri()` above.
 - **`mappings {}` routing style — static paths + query params, NOT colon-style path variables**:
   ```groovy
   mappings {

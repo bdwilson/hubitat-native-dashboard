@@ -10,12 +10,12 @@ It is deliberately separate from [bdwilson/cf-hubitat-dashboard](https://github.
 
 ## The idea
 
-A Hubitat App can make HTTP calls to any URL — including its own hub, on its LAN IP. So instead of reimplementing device access, capability detection, and command dispatch in Groovy from scratch, this App acts as a **thin proxy** in front of an existing Maker API instance:
+A Hubitat App can make HTTP calls to any URL — including its own hub, on `127.0.0.1:8080`. So instead of reimplementing device access, capability detection, and command dispatch in Groovy from scratch, this App acts as a **thin proxy** in front of an existing Maker API instance:
 
 ```
 Browser ──OAuth token──► This App (on the hub)
                               │
-                              └──httpGet hub LAN IP──► Maker API (same hub)
+                              └──httpGet 127.0.0.1:8080──► Maker API (same hub)
                                                           │
                                                           └──► your devices
 ```
@@ -58,9 +58,9 @@ This has never run on real hardware. When you try it, these are the interesting 
 | Does toggling a switch work? | Command proxying works |
 | Does the **cloud** link do all of the above? | Hubitat's cloud OAuth proxy passes through correctly |
 
-If the device list fails, **Logs** in the Hubitat admin UI (filtered to this app) will have the error — `makerApiGet` logs failures with the message. Two issues already found and fixed during real-hub testing (see commit history):
+If the device list fails, **Logs** in the Hubitat admin UI (filtered to this app) will have the error — `makerApiGet` logs failures with the message. Issues already found and fixed during real-hub testing (see commit history):
 - The embedded test page originally used root-relative fetch URLs (`/devices/all`, `/cmd`), which resolve against the hub's origin root instead of this app's own base path — fixed by making them path-relative.
-- `127.0.0.1` is **not** reachable from app code on a real hub — `httpGet` to it fails with connection refused. Fixed by calling `location.hub.localIP` instead.
+- Self-calls need port **8080**, not port 80/443. Two wrong attempts confirmed this: plain `127.0.0.1` (port 80) and `location.hub.localIP` (port 80) both fail with connection refused. Port 80/443 fronts the hub's admin/browser-facing web server; the internal app engine that serves `/apps/api/...` to the hub calling itself listens on 8080/8443. Fixed by using `127.0.0.1:8080`. This matches evdev/hubitat-modern-dashboard's own `hubLoginUri()` (`http://127.0.0.1:8080`), confirmed by reading their actual source.
 
 If the device list still fails after these fixes, the most likely remaining culprit is the Maker API App ID/token being wrong.
 
@@ -93,7 +93,7 @@ These apply to *any* on-hub dashboard, including this one — they're documented
 
 ## Status
 
-In real-hub testing. Compile error, a root-relative-URL bug, and a `127.0.0.1`-unreachable bug have been found and fixed so far (see commit history). Device listing has not yet been confirmed working end-to-end.
+In real-hub testing. A compile error, a root-relative-URL bug, and a self-call wrong-port bug (needed `127.0.0.1:8080`, not port 80) have been found and fixed so far (see commit history). Device listing has not yet been confirmed working end-to-end.
 
 ## Credits
 
