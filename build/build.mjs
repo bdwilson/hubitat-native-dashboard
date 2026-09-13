@@ -240,30 +240,192 @@ function buildLoader(chunkNames, version) {
     }
   }
 
-  // In ?local=1 the hub config is neither read nor written, so "Save Config to
-  // Hub" would do nothing while reporting success. Replace it with a statement
-  // of what is actually happening rather than leaving a button that lies.
-  function markLocalOnlyMode() {
-    if (new URLSearchParams(location.search).get('local') !== '1') return;
+  // Where does this browser's layout live — on the hub (shared) or here only?
+  // Adds the toggle to the settings panel and keeps the rest of the panel
+  // honest about the current choice.
+  var MODE_KEY = 'hnd-config-mode';
+  // Upstream's localStorage key. Read directly so "publish my local layout" can
+  // work from here without reaching into the app's closure.
+  var CACHE_KEY = 'hubitat-dash-v4-cache';
+
+  function isLocalMode() {
+    var q = new URLSearchParams(location.search).get('local');
+    if (q === '1') return true;
+    if (q === '0') return false;
+    try { return localStorage.getItem(MODE_KEY) === 'local'; } catch (e) { return false; }
+  }
+
+  // Reload without ?local=, so the remembered mode is what takes effect.
+  function reloadWithStoredMode() {
+    var u = new URL(location.href);
+    u.searchParams.delete('local');
+    location.href = u.toString();
+  }
+
+  function setMode(mode) {
+    try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
+  }
+
+  // Build the /config payload from the browser's cached layout. Mirrors what the
+  // app's own save sends, minus the hub block — Maker API credentials live in
+  // the App's settings on the hub and must not be overwritten from a browser.
+  function publishLocalLayout(token) {
+    var raw = null;
+    try { raw = localStorage.getItem(CACHE_KEY); } catch (e) {}
+    if (!raw) return Promise.reject(new Error('no layout cached in this browser yet'));
+    var c = JSON.parse(raw);
+    var payload = {
+      dashboard: {
+        title: c.title, pollSec: c.pollSec, slots: c.slots, layout: c.layout,
+        gridCols: c.gridCols, tileH: c.tileH, iconScale: c.iconScale,
+        hubExternalUrl: c.hubExternalUrl, chipAccent: c.chipAccent,
+        chipAccentDynamic: c.chipAccentDynamic, theme: c.theme,
+      },
+    };
+    if (c.dynamic) payload.dynamic = c.dynamic;
+    if (c.custom) payload.custom = c.custom;
+    if (c.dashboardsVisible) payload.dashboardsVisible = c.dashboardsVisible;
+    if (c.dashboardsOrder) payload.dashboardsOrder = c.dashboardsOrder;
+    if (c.statusBarPresenceDevices) payload.statusBarPresenceDevices = c.statusBarPresenceDevices;
+    return fetch('config' + (token ? '?access_token=' + encodeURIComponent(token) : ''), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return true;
+    });
+  }
+
+  // Copy the hub's stored layout into this browser's cache, so switching to
+  // local mode starts from exactly what is on screen and then diverges.
+  //
+  // This is not optional. boot() applies the hub config to memory but never
+  // writes it to the browser cache, so without this step switching to local
+  // would reload whatever stale cache happened to be there — not the layout the
+  // user was just looking at.
+  function copyHubConfigToLocal(token) {
+    return fetch('config' + (token ? '?access_token=' + encodeURIComponent(token) : ''))
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (c) {
+        var existing = {};
+        try {
+          var raw = localStorage.getItem(CACHE_KEY);
+          if (raw) existing = JSON.parse(raw);
+        } catch (e) {}
+
+        var d = c.dashboard || {};
+        var cache = existing;
+        function put(key, value) { if (value !== undefined && value !== null) cache[key] = value; }
+
+        put('title', d.title); put('pollSec', d.pollSec); put('slots', d.slots);
+        put('layout', d.layout); put('gridCols', d.gridCols); put('tileH', d.tileH);
+        put('iconScale', d.iconScale); put('hubExternalUrl', d.hubExternalUrl);
+        put('chipAccent', d.chipAccent); put('chipAccentDynamic', d.chipAccentDynamic);
+        put('theme', d.theme);
+        if (c.hub) {
+          put('hubBaseUrl', c.hub.baseUrl);
+          put('hubAppId', c.hub.appId);
+          put('hubIsCloud', c.hub.isCloud);
+          put('hubHasToken', c.hub.hasToken);
+        }
+        put('dynamic', c.dynamic); put('custom', c.custom);
+        put('dashboardsVisible', c.dashboardsVisible);
+        put('dashboardsOrder', c.dashboardsOrder);
+        put('statusBarPresenceDevices', c.statusBarPresenceDevices);
+
+        localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+        return true;
+      });
+  }
+
+  function installConfigModeUi() {
     try {
+      var local = isLocalMode();
       var save = document.getElementById('save-cfg');
-      if (save) save.style.display = 'none';
-      var modal = document.getElementById('settings-modal');
-      var card = modal ? modal.querySelector('.modal-card') : null;
-      if (card && !document.getElementById('hnd-local-note')) {
-        var note = document.createElement('div');
-        note.id = 'hnd-local-note';
-        note.className = 'help';
-        note.style.cssText = 'border-left:3px solid #ef6c00;padding-left:8px;margin:8px 0';
-        note.innerHTML =
-          '<b>Local-only mode.</b> This browser keeps its own layout and does not ' +
-          'read or write the dashboard config stored on the hub. Devices and ' +
-          'commands still go to the same hub. Drop <code>&amp;local=1</code> from the ' +
-          'URL to go back to the shared layout.';
-        card.insertBefore(note, card.firstChild ? card.firstChild.nextSibling : null);
+      if (save) save.style.display = local ? 'none' : '';
+
+      var row = save && save.closest ? save.closest('.btn-row') : null;
+      if (!row || document.getElementById('hnd-mode-box')) return;
+
+      var box = document.createElement('div');
+      box.id = 'hnd-mode-box';
+      box.className = 'form-row';
+      box.innerHTML =
+        '<label>Where this dashboard\\'s layout is stored</label>' +
+        '<select id="hnd-mode-select">' +
+        '<option value="hub">On the hub — shared by every browser</option>' +
+        '<option value="local">In this browser only — private layout</option>' +
+        '</select>' +
+        '<div class="help" id="hnd-mode-help" style="margin-top:4px;font-size:11px"></div>';
+      row.parentNode.insertBefore(box, row);
+
+      var sel = document.getElementById('hnd-mode-select');
+      var help = document.getElementById('hnd-mode-help');
+      sel.value = local ? 'local' : 'hub';
+      help.innerHTML = local
+        ? 'This browser keeps its own layout. The hub\\'s shared config is neither ' +
+          'read nor written — devices and commands still go to the same hub.'
+        : 'The layout is stored on the hub, so every browser opening this link sees ' +
+          'the same dashboard.';
+
+      if (local) {
+        var pub = document.createElement('button');
+        pub.className = 'btn secondary';
+        pub.id = 'hnd-publish';
+        pub.textContent = '⬆ Publish this layout to the hub';
+        pub.style.marginTop = '6px';
+        pub.addEventListener('click', function () {
+          if (!confirm('Replace the hub\\'s shared layout with this browser\\'s layout, ' +
+                       'and switch this browser back to the shared layout?')) return;
+          var token = new URLSearchParams(location.search).get('access_token') || '';
+          publishLocalLayout(token).then(function () {
+            setMode('hub');
+            reloadWithStoredMode();
+          }).catch(function (e) {
+            alert('Could not publish to the hub: ' + e.message);
+          });
+        });
+        box.appendChild(pub);
       }
+
+      sel.addEventListener('change', function () {
+        if (sel.value === 'local') {
+          // Take a copy of what is on screen first, then stop syncing. Without
+          // the copy this would reload a stale browser cache instead of the
+          // hub layout the user is currently looking at.
+          sel.disabled = true;
+          help.textContent = 'Copying the hub layout into this browser…';
+          var t = new URLSearchParams(location.search).get('access_token') || '';
+          copyHubConfigToLocal(t).then(function () {
+            setMode('local');
+            reloadWithStoredMode();
+          }).catch(function (e) {
+            sel.disabled = false;
+            sel.value = 'hub';
+            help.textContent = '';
+            alert('Could not copy the hub layout into this browser: ' + e.message +
+                  '\\n\\nStaying on the shared layout.');
+          });
+          return;
+        }
+        // Switching back adopts the hub's layout, replacing this browser's.
+        // Cancel aborts the switch entirely — no hidden second meaning.
+        if (!confirm('Switch to the shared layout stored on the hub?\\n\\n' +
+                     'This browser\\'s private layout will be replaced by the shared one. ' +
+                     'To keep it, cancel and use "Publish this layout to the hub" instead, ' +
+                     'or Download Config first.')) {
+          sel.value = 'local';
+          return;
+        }
+        setMode('hub');
+        reloadWithStoredMode();
+      });
     } catch (e) {
-      console.warn('local-only marker skipped', e);
+      console.warn('config mode UI skipped', e);
     }
   }
 
@@ -280,7 +442,7 @@ function buildLoader(chunkNames, version) {
     // program, so behaviour matches the Cloudflare build.
     (0, eval)(texts.join('\\n'));
     hideHubConnectionFields();
-    markLocalOnlyMode();
+    installConfigModeUi();
   }).catch(function (e) {
     fail('Could not load the dashboard code from the hub.', e && e.message);
   });
@@ -351,6 +513,18 @@ async function main() {
   const shell = `${head}\n${stamp}\n${BOOT_NOTICE}\n${buildLoader(chunkNames, version)}\n${tail}`;
 
   const outDir = path.resolve(REPO_ROOT, args.out);
+
+  // Reuse the previous builtAt when the content is unchanged, so rebuilding
+  // identical inputs produces byte-identical output. Without this, every
+  // scheduled CI run would rewrite the timestamp and commit a no-op change
+  // daily — and `git status` would stop being a usable signal for "did the
+  // build actually change anything?".
+  let builtAt = new Date().toISOString();
+  try {
+    const prev = JSON.parse(await readFile(path.join(outDir, 'hnd-manifest.json'), 'utf8'));
+    if (prev.version === version && prev.builtAt) builtAt = prev.builtAt;
+  } catch (e) { /* no previous build, or unreadable — use now */ }
+
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
@@ -377,8 +551,12 @@ async function main() {
   const manifest = {
     version,
     upstreamSha256: upstreamHash,
-    upstreamSource: src.at,
-    builtAt: new Date().toISOString(),
+    // Deliberately no upstreamSource path here. It differs between a local
+    // checkout and CI, which would churn this file on every alternating build,
+    // and a local build would otherwise commit an absolute filesystem path into
+    // a public repo. upstreamSha256 identifies the content regardless of where
+    // it was read from, which is the part that actually matters.
+    builtAt,
     shell: 'hnd-shell.html',
     chunks: chunkNames,
     bundle: 'hubitat-native-dashboard.zip',

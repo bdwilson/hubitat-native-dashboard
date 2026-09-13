@@ -1,3 +1,16 @@
+    const attr = device.attributes.find(a => a.name === name);
+    if (attr) attr.currentValue = value;
+    else device.attributes.push({ name, currentValue: value });
+  }
+
+  // Re-render any main-dashboard tiles using this device
+  for (const [slotId, s] of Object.entries(cfg.slots)) {
+    if (String(s.deviceId) === deviceId) renderTile(slotId);
+  }
+
+  // Update status bar if a presence attribute changed
+  if (name === 'presence') updateStatusBar();
+
   // Update dynamic/custom views if visible
   if (currentView.startsWith('dynamic/')) {
     renderDynamicDashboard(currentView.replace('dynamic/', ''));

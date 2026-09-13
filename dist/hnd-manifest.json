@@ -1,8 +1,7 @@
 {
-  "version": "21aade05bc",
+  "version": "b6f42e62d4",
   "upstreamSha256": "bcaa156b72e8",
-  "upstreamSource": "/home/user/bdwilson/cf-hubitat-dashboard/src/assets/index.html",
-  "builtAt": "2026-09-13T13:28:52.297Z",
+  "builtAt": "2026-09-13T13:35:29.964Z",
   "shell": "hnd-shell.html",
   "chunks": [
     "hnd-app-1.js",
@@ -25,9 +24,9 @@
   ],
   "relabels": 18,
   "bytes": {
-    "hnd-shell.html": 59200,
-    "hnd-app-1.js": 98295,
-    "hnd-app-2.js": 98264,
-    "hnd-app-3.js": 32098
+    "hnd-shell.html": 66050,
+    "hnd-app-1.js": 98267,
+    "hnd-app-2.js": 98263,
+    "hnd-app-3.js": 32554
   }
 }

@@ -53,19 +53,38 @@ node build/build.mjs            # sibling checkout, else fetches from GitHub
 node build/build.mjs --source <path-or-url>
 ```
 
-## Per-browser layouts (`&local=1`)
+## Per-browser layouts
 
-Add `&local=1` to a dashboard link and that browser keeps its own layout: the hub's stored config is **neither read nor written**.
+The settings panel has **"Where this dashboard's layout is stored"**:
 
-```
-http://<hub>/apps/api/<id>/dashboard?access_token=<token>&local=1
-```
+- **On the hub** — shared; every browser opening the link sees the same dashboard. (Default.)
+- **In this browser only** — private to that browser. The hub's config is **neither read nor written**.
 
-Devices, commands and real-time updates still come from the same hub — only *where the tile layout lives* changes. Use it to hand someone a link to the same hub with a different set of tiles, or to experiment without disturbing the shared dashboard.
+Devices, commands and real-time updates always come from the same hub. Only *where the tile layout lives* changes.
 
-In that mode the **Save Config to Hub** button is hidden (it would do nothing while reporting success) and the settings panel says so. Layout is kept in that browser's `localStorage`, so clearing site data loses it — use **Download Config** first if you care about it.
+**Switching to local copies the hub's layout in first**, so you start from exactly what's on screen and then diverge — take a shared dashboard, tweak it for one wall tablet, and the shared one is untouched. (This copy is load-bearing: the app applies the hub config to memory but never writes it to the browser cache, so without it you'd get whatever stale cache happened to be there.)
 
-Worth knowing: hiding a device and editing a custom dashboard normally save to the hub on their own, without touching the save button. Local-only mode suppresses those too, so a "local" browser can't quietly rewrite what everyone else sees. Verified: a session in this mode issued zero writes and left the hub's config untouched.
+**Switching back** offers both directions, each as its own control so neither has a hidden second meaning:
+- **⬆ Publish this layout to the hub** — pushes your private layout up, replacing the shared one, and returns you to shared mode.
+- **The toggle itself** — adopts the hub's layout, replacing your private one. Cancelling aborts the switch; it never silently discards anything.
+
+In local mode the **Save Config to Hub** button is hidden, since it would do nothing while reporting success.
+
+The choice is remembered per browser. `&local=1` / `&local=0` on the URL still force a mode for one load regardless, so you can hand out a link without changing what someone's browser remembers.
+
+Two things worth knowing:
+- Hiding a device and editing a custom dashboard normally save to the hub **on their own**, without the save button. Local mode suppresses those too, so a private browser can't quietly rewrite what everyone else sees. Verified: a session in local mode issued zero writes and left the hub's config untouched.
+- A private layout lives in that browser's `localStorage`, so clearing site data loses it. Use **Download Config** to keep a copy.
+
+## Building in CI
+
+`.github/workflows/build.yml` builds `dist/` on a GitHub runner and commits it back, so no local Node install is needed to produce a distribution. It runs on pushes touching `app/` or `build/`, nightly, and on demand.
+
+It commits `dist/` rather than uploading an artifact because the app's **Install / update dashboard UI** button fetches those files from this repo — as artifacts they'd be unreachable from a hub.
+
+The nightly run earns its keep twice over. The frontend is read from `cf-hubitat-dashboard` at build time rather than vendored, so it picks up upstream changes automatically — and because the build asserts every transport patch matches **exactly once**, a restructured upstream fails the run and names the patch that stopped matching, instead of that surfacing as a broken dashboard on a hub.
+
+The build is reproducible: rebuilding unchanged inputs produces byte-identical output (`builtAt` is reused when the build id is unchanged, and no local source path is recorded), so CI only commits when something genuinely changed. A local build and a CI build of the same inputs are identical. CI also compiles the app with `check-groovy.groovy` and fails before building if it won't compile.
 
 ## Version tracking
 

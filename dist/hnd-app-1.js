@@ -6,11 +6,21 @@
 const API_CONFIG = 'config?access_token=' + encodeURIComponent(new URLSearchParams(location.search).get('access_token') || '');
 const API_HUB    = 'hub';
 const STORAGE_KEY = 'hubitat-dash-v4-cache';
-// hubitat-native-dashboard: with ?local=1 this browser keeps its layout to
+// hubitat-native-dashboard: in local mode this browser keeps its layout to
 // itself — the hub's stored config is neither read nor written. Everything
 // still runs against the same hub and the same devices; only where the tile
 // layout lives changes.
-const HND_LOCAL_ONLY = new URLSearchParams(location.search).get('local') === '1';
+//
+// The mode is remembered per browser (settings panel toggle). ?local=1 and
+// ?local=0 force it for one load regardless, so a link can be handed to someone
+// without changing what their browser remembers.
+const HND_MODE_KEY = 'hnd-config-mode';
+const HND_LOCAL_ONLY = (function () {
+  var q = new URLSearchParams(location.search).get('local');
+  if (q === '1') return true;
+  if (q === '0') return false;
+  try { return localStorage.getItem(HND_MODE_KEY) === 'local'; } catch (e) { return false; }
+})();
 
 // Default layout: section → ordered slot IDs.
 // Slot IDs are stable — KV config keys off them.
@@ -1386,16 +1396,3 @@ document.getElementById('confirm-no').addEventListener('click', () => {
 let lightboxDeviceId = null;
 
 function bustImageUrl(url) {
-  return url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now();
-}
-
-function openLightbox(url, label, deviceId) {
-  const modal = document.getElementById('lightbox-modal');
-  const img   = document.getElementById('lightbox-img');
-  const lbl   = document.getElementById('lightbox-label');
-  if (!modal || !img) return;
-  lightboxDeviceId = deviceId || null;
-  img.src = url;
-  if (lbl) lbl.textContent = label || '';
-  modal.classList.add('open');
-}

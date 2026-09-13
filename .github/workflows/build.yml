@@ -1,0 +1,90 @@
+name: Build dashboard assets
+
+# Builds dist/ on the runner and commits it back, so nobody needs Node locally
+# to produce a distribution.
+#
+# dist/ is committed rather than attached as an artifact because the App's
+# "Install / update dashboard UI" button fetches those files from this repo over
+# raw.githubusercontent.com. If they only existed as workflow artifacts, that
+# button would have nothing to install from.
+#
+# The scheduled run matters as much as the push run. The frontend is read from
+# cf-hubitat-dashboard at build time rather than vendored, so upstream can change
+# underneath this repo. The build asserts every transport patch matches exactly
+# once, which turns the nightly run into drift detection: if upstream is
+# restructured, this fails and says which patch stopped matching, instead of the
+# breakage being discovered on a hub.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      # Deliberately excludes dist/**, so this workflow's own commit cannot
+      # retrigger it.
+      - 'app/**'
+      - 'build/**'
+      - '.github/workflows/build.yml'
+  schedule:
+    # Daily, to pick up upstream frontend changes and catch patch drift early.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Groovy 2.4.x matches what Hubitat runs. This compiles the app to
+      # CLASS_GENERATION, the phase that catches what the hub's editor rejects on
+      # Save — including "Modifier 'private' not allowed here", which earlier
+      # compiler phases let through. Gate the build on it: shipping a dist/ whose
+      # bundled app will not compile helps nobody.
+      - name: Install Groovy
+        run: sudo apt-get update && sudo apt-get install -y groovy
+
+      - name: Check the app compiles
+        run: groovy build/check-groovy.groovy app/HubitatNativeDashboard.groovy
+
+      # No --source: falls back to fetching cf-hubitat-dashboard's frontend from
+      # GitHub. Fails if a transport patch no longer matches, or if any chunk
+      # exceeds Hubitat's File Manager / cloud response ceilings.
+      - name: Build
+        run: node build/build.mjs
+
+      - name: Report build
+        run: |
+          echo "### Dashboard build" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat dist/hnd-manifest.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit dist/ if it changed
+        # Only on branches of this repo. A fork's PR has no write token, and
+        # pushing to someone else's branch is not this workflow's business.
+        if: github.event_name != 'pull_request'
+        run: |
+          if [ -z "$(git status --porcelain dist)" ]; then
+            echo "dist/ unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist
+          BUILD=$(node -p "require('./dist/hnd-manifest.json').version")
+          UPSTREAM=$(node -p "require('./dist/hnd-manifest.json').upstreamSha256")
+          git commit -m "Rebuild dashboard assets (build ${BUILD})" \
+                     -m "Upstream cf-hubitat-dashboard frontend sha256:${UPSTREAM}." \
+                     -m "Built by .github/workflows/build.yml."
+          git push

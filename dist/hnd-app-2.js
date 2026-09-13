@@ -1,3 +1,17 @@
+  return url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now();
+}
+
+function openLightbox(url, label, deviceId) {
+  const modal = document.getElementById('lightbox-modal');
+  const img   = document.getElementById('lightbox-img');
+  const lbl   = document.getElementById('lightbox-label');
+  if (!modal || !img) return;
+  lightboxDeviceId = deviceId || null;
+  img.src = url;
+  if (lbl) lbl.textContent = label || '';
+  modal.classList.add('open');
+}
+
 // Called on a forced refresh (pull-to-refresh) — re-derives the freshest
 // known URL for the open lightbox's device and cache-busts it, since the
 // lightbox has no polling/render cycle of its own.
@@ -2213,15 +2227,3 @@ function applyDeviceAttrUpdate(deviceId, name, value) {
   if (!device) return;
 
   if (Array.isArray(device.attributes)) {
-    const attr = device.attributes.find(a => a.name === name);
-    if (attr) attr.currentValue = value;
-    else device.attributes.push({ name, currentValue: value });
-  }
-
-  // Re-render any main-dashboard tiles using this device
-  for (const [slotId, s] of Object.entries(cfg.slots)) {
-    if (String(s.deviceId) === deviceId) renderTile(slotId);
-  }
-
-  // Update status bar if a presence attribute changed
-  if (name === 'presence') updateStatusBar();

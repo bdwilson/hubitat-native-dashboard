@@ -169,7 +169,11 @@ Everything that differs between the Cloudflare build and this one lives in `buil
 
 `RELABELS` must cover **runtime strings, not just markup**. The first pass only caught static labels, and a user hit a `confirm()` during *Reset Everything* asking about wiping "KV" on a hub with no Cloudflare anywhere. When adding one, grep the built `dist/` output, not just the source markup. Function names (`fetchConfigFromWorker`, `pushConfigToWorker`) and code comments are deliberately left alone — renaming them is churn with no user-facing benefit and more drift surface.
 
-**Local-only mode (`?local=1`)** is three patches, and it needs all three. `fetchConfigFromWorker` throws (boot() already falls back to the localStorage cache, which is exactly the wanted behaviour) and `pushConfigToWorker` resolves as a no-op. The write side is not optional: hiding a device and editing a custom dashboard push to the server on their own, so without it a "local" browser would still mutate the shared layout. The loader additionally hides the save button, which would otherwise report success for a write that never happened.
+**Local mode** is three patches plus loader UI, and it needs all of them. `fetchConfigFromWorker` throws (boot() already falls back to the localStorage cache, which is exactly the wanted behaviour) and `pushConfigToWorker` resolves as a no-op. The write side is not optional: hiding a device and editing a custom dashboard push to the server on their own, so without it a "local" browser would still mutate the shared layout. The loader hides the save button, which would otherwise report success for a write that never happened.
+
+The mode is remembered in `localStorage` (`hnd-config-mode`); `?local=1` / `?local=0` override for one load so a link can be handed out without changing what a browser remembers.
+
+**Switching hub → local must copy the hub config into the browser cache first** (`copyHubConfigToLocal` in the loader). `boot()` applies the hub config to memory but never calls `saveConfigCache()`, so without the copy the reload restores a stale cache instead of the layout the user was looking at. The loader can do this without app internals because the cache is just `{...cfg, dynamic, custom, dashboardsVisible, dashboardsOrder, statusBarPresenceDevices}` under `hubitat-dash-v4-cache`; `publishLocalLayout` reads the same shape back for the opposite direction. Both directions are exposed as separate controls on purpose — a single confirm() whose Cancel branch means "discard my layout" is a trap.
 
 Do not move an item between those categories casually. The one that bit a user: "Save Config to KV" is the button that writes to the hub's app state on this build, and read as a Cloudflare feature it looks skippable — which strands config in one browser's localStorage.
 
@@ -188,6 +192,14 @@ One patch, `import-syncs-all-settings-inputs`, is **not** a transport change —
 Sub-paths go in a query param because Hubitat's colon-style path-variable mapping syntax has no verified precedent in shipped code.
 
 **If a patch stops matching**, upstream changed. Go read the relevant code in cf-hubitat-dashboard and update the patch — do not loosen it into a regex that "probably still works."
+
+## CI
+
+`.github/workflows/build.yml` compiles the app with `check-groovy.groovy`, builds `dist/`, and commits it back. `dist/` is committed rather than uploaded as an artifact because the app's self-install button fetches it from this repo.
+
+**The build must stay reproducible** or CI commits noise on every nightly run. Two rules follow from that: `builtAt` is reused when the build id is unchanged, and no source *path* is recorded in the manifest (it differs between a local checkout and CI, and would leak an absolute path into a public repo). Verified: two consecutive builds, and a local-source vs GitHub-source build, all produce byte-identical `dist/`. If you add a field to the manifest, make sure it is content-derived.
+
+The push trigger excludes `dist/**` so the workflow's own commit cannot retrigger it. The nightly run doubles as upstream-drift detection — an asserted patch that stops matching fails the run and names itself.
 
 ## Tooling that exists now (this environment CAN test some things)
 
