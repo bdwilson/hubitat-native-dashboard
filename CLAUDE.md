@@ -1,12 +1,21 @@
-# CLAUDE.md — Hubitat Native Dashboard (spike)
+# CLAUDE.md — Hubitat Native Dashboard
 
 This file gives future Claude sessions enough context to work in this repo **without any other repo open**. Read this before making any changes.
 
 ## What this is
 
-A **feasibility spike**, not a product yet. The question it exists to answer: can a Hubitat dashboard run **entirely on the hub** — no Cloudflare Worker, no external hosting, no separate cloud account — by wrapping Hubitat's existing Maker API from inside a native, OAuth-enabled Hubitat App?
+An **on-hub port of [bdwilson/cf-hubitat-dashboard](https://github.com/bdwilson/cf-hubitat-dashboard)**: the same dashboard frontend, served entirely from the Hubitat hub, with Maker API wrapped for device access and the app's own `state` for config. No Cloudflare Worker, no external hosting, no separate cloud account.
 
-This repo is deliberately separate from **[bdwilson/cf-hubitat-dashboard](https://github.com/bdwilson/cf-hubitat-dashboard)**, the maintainer's actual production dashboard (Cloudflare Worker + KV, actively used, actively developed). That project has its own CLAUDE.md with its own architecture, conventions, and history — **do not assume anything from that project applies here**, and do not port work from here into that repo unless the maintainer explicitly asks. This repo's job is to prove or disprove an idea in isolation. If it works out, a future decision (by the maintainer) determines whether/how it feeds back into the production dashboard. Until then, treat these as two unrelated codebases that happen to be about the same subject.
+It began as a feasibility spike asking whether that was possible at all. It is no longer a spike — the mechanism was proved on real hardware (see Status), and the maintainer then asked to build it out to match the production dashboard, with interoperable config exports. History matters for reading old commits, but the current job is a working dashboard, not an experiment.
+
+### The relationship to cf-hubitat-dashboard has changed — read this
+
+The original boundary was "these are two unrelated codebases; do not copy between them." **That was superseded when the maintainer asked to mimic the Cloudflare dashboard and make config exports portable between the two.** The current arrangement:
+
+- This repo **reads** cf-hubitat-dashboard's `src/assets/index.html` at build time and patches its transport layer. It does **not** vendor a copy — there is no duplicated frontend here to drift.
+- The config JSON shape is **deliberately identical** to that project's, because that is what makes exports portable. Changing the shape here without changing it there breaks the feature the maintainer asked for.
+- Still true: **do not push changes from here into cf-hubitat-dashboard** without an explicit instruction. Reading it is expected; writing to it is not.
+- Still true: that project has its own CLAUDE.md, architecture and conventions. Go read it before touching it; none of this file's conventions transfer there.
 
 ## Why this exists (origin of the idea)
 
@@ -25,7 +34,7 @@ The production dashboard (cf-hubitat-dashboard) requires a Cloudflare account, a
 - Real-time updates: local-only WebSocket (`ws://<hub-ip>/eventsocket`, undocumented Hubitat feature), polling fallback always. Cloud URL is polling-only — cloud proxy doesn't expose eventsocket. (This is the *same* limitation cf-hubitat-dashboard already has and already handles the same way — not a new problem introduced by going hub-native.)
 - A real, non-obvious gotcha they hit and documented: **do not proxy binary image bytes through Hubitat Cloud** — its render path corrupts binary responses. Their PWA icons are hosted externally on `raw.githubusercontent.com` instead, specifically to avoid this. Their in-app icons are base64-encoded text files in File Manager (`.b64`), decoded server-side, rendered as `image/png` — worth reusing that exact pattern if this spike ever needs to serve binary assets.
 
-## The core idea this spike tests: wrap Maker API instead of reimplementing device access
+## The core idea: wrap Maker API instead of reimplementing device access
 
 A Hubitat App can `httpGet` any URL, including the hub's own Maker API endpoint on `127.0.0.1:8080` — mechanically identical to what evdev's project already proves works (its `fetchLocalAssetUncached()` does `httpGet` to `${hubBaseUri()}/local/<file>`, the hub calling itself). So instead of rebuilding device access, capability detection, and command dispatch from scratch in Groovy (evdev's approach), this spike's App can be a **thin proxy** in front of an existing, separately-configured Maker API instance:
 
@@ -36,7 +45,7 @@ A Hubitat App can `httpGet` any URL, including the hub's own Maker API endpoint 
 
 ### Why this fits cf-hubitat-dashboard's design specifically (even though this repo doesn't touch that code)
 
-cf-hubitat-dashboard's tile system is a **flat, free-form device list** — any tile can be assigned any device with any capability, picked from one big dropdown. That's Maker API's model exactly. evdev's capability-bucketed `input` pickers don't map onto that without redesigning the tile editor. Wrapping Maker API keeps the existing device-selection screen, the existing JSON shape (`getAttr()`, `hasCapability()`, `dynKindForDevice()` — all of it), and the existing command URL shape (`/devices/{id}/{command}/{secondary}`) that the production dashboard's frontend already expects. If this spike is ever ported back, the goal is that as much of that frontend logic as possible needs **zero changes** — only the transport layer (how the frontend fetches data / sends commands, and how config gets persisted) would need a second implementation.
+cf-hubitat-dashboard's tile system is a **flat, free-form device list** — any tile can be assigned any device with any capability, picked from one big dropdown. That's Maker API's model exactly. evdev's capability-bucketed `input` pickers don't map onto that without redesigning the tile editor. Wrapping Maker API keeps the existing device-selection screen, the existing JSON shape (`getAttr()`, `hasCapability()`, `dynKindForDevice()` — all of it), and the existing command URL shape (`/devices/{id}/{command}/{secondary}`) that the production dashboard's frontend already expects. That prediction held exactly: the port needed **zero changes** to tiles, layout, the editor, custom dashboards or the config model. The entire delta is seven transport patches in `build/patches.mjs` plus a config store in the app's `state`. If a future change here starts needing changes to frontend *logic* rather than transport, that is a sign something has gone wrong — reach for a patch to the seam, not a fork of the UI.
 
 ### Real trade-offs of wrapping vs. reimplementing (evdev's approach)
 
@@ -109,26 +118,66 @@ Use these exact patterns rather than inventing syntax from general Hubitat knowl
 - **Binary assets**: base64-encode as text (`.b64` files), decode server-side (`bytes.decodeBase64()`), `render contentType: "image/png", data: new String(bytes, "ISO-8859-1"), status: 200`. Do not attempt to proxy raw binary bytes through Hubitat Cloud — corrupts.
 - **Maker API's `GET /devices/all` returns `attributes` as a flat object keyed by attribute name** — `{"switch": "off", ...}` — **not** an array of `{name, currentValue}` objects. Confirmed against community-documented example responses (this spike's first pass assumed the array shape, which meant every `getAttr()` lookup silently returned `undefined` and no device ever appeared controllable — no runtime error, just nothing worked). `GET /devices/{id}` (single device) may format attributes differently than `/devices/all` — this has been reported as an inconsistency in Maker API itself, not verified further here since this spike only uses `/devices/all`.
 
-## What is NOT yet verified
+## Architecture: how the frontend gets onto the hub
 
-Nothing in this repo has been run against a real Hubitat hub. There is no way to compile or test Groovy in this development environment — no Hubitat hub, no emulator. Every file here should be treated as "written carefully against verified patterns, but unconfirmed" until the maintainer pastes it into a real hub's Apps Code and reports back what happened. Do not claim something "works" — say what it's expected to do and that it needs real-hub testing, matching how the rest of this spike's documentation is written.
+The UI is not in the Groovy file, and cannot be. Two ceilings force a build step:
+**File Manager caps a file at 124 KB**, and **Hubitat Cloud caps a response at ~128 KB**.
+The upstream dashboard is one ~280 KB HTML file.
+
+So `build/build.mjs`:
+
+1. Reads cf-hubitat-dashboard's `src/assets/index.html` — from `--source`, `$CF_DASHBOARD_SRC`, a sibling checkout, or GitHub raw. **Never vendored.**
+2. Applies the transport patches in `build/patches.mjs`.
+3. Splits it into `hnd-shell.html` (head + CSS + body markup + a chunk loader) and `hnd-app-N.js` chunks.
+4. **Fails the build** if any file exceeds either ceiling.
+
+The user uploads `dist/` to File Manager; the app re-serves those files through its own routes.
+
+### The chunk loader, and why it is not `<script src>`
+
+The upstream app is one big IIFE. Splitting it across `<script>` tags would tear functions in half. Instead the loader fetches each chunk **as text**, concatenates, and runs one indirect `eval`. The rejoined text is byte-identical to the patched original (asserted during development), so the browser parses exactly the upstream program. It also costs zero escaping overhead, unlike wrapping each chunk in a string literal.
+
+### The transport seam
+
+Everything that differs between the Cloudflare build and this one lives in `build/patches.mjs` — seven asserted find/replace patches. Each **must** match exactly once or the build fails loudly, because these patterns match code in a repo this one does not control.
+
+| What | Cloudflare | Here |
+|---|---|---|
+| Config API | `/api/config` | `config?access_token=…` |
+| Device access | `/api/hub/<sub-path>` | `hub?path=<url-encoded sub-path>` |
+| Event socket | Worker proxies `/api/hub/events` | browser hits `ws://<hub>/eventsocket` directly |
+| Cloud detection | configured hub URL | `location.hostname` — how the *browser* reached the page |
+| PWA manifest/icons | Worker static assets | stripped (no asset origin; cloud corrupts binaries) |
+
+Sub-paths go in a query param because Hubitat's colon-style path-variable mapping syntax has no verified precedent in shipped code.
+
+**If a patch stops matching**, upstream changed. Go read the relevant code in cf-hubitat-dashboard and update the patch — do not loosen it into a regex that "probably still works."
+
+## Tooling that exists now (this environment CAN test some things)
+
+An earlier version of this file said there was no way to compile or test anything here. That is no longer true:
+
+- **`groovy build/check-groovy.groovy app/HubitatNativeDashboard.groovy`** compiles the app to `CLASS_GENERATION`. Install with `apt-get install -y groovy` (2.4.x, matching Hubitat). This catches what the hub's editor rejects on Save — verified by feeding it this repo's own historical `Modifier 'private' not allowed here` bug, which **`CONVERSION` and `SEMANTIC_ANALYSIS` both let through**; only `CLASS_GENERATION` catches it. Run it before handing any Groovy change to the maintainer.
+- **`node build/dev-server.mjs`** stands in for the app (same routes, faked Maker API data in its real `/devices/all` shape) so the frontend and build can be exercised in a browser. Chromium is available at `/opt/pw-browsers/chromium-*/chrome-linux/chrome` with `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`.
+
+What that tooling does **not** prove: that the Groovy behaves correctly on a hub. `dev-server.mjs` is a second implementation in JavaScript and can drift from the Groovy. A green browser run means the frontend, loader and patches are sound — nothing more. Still do not claim the app "works" on a hub until the maintainer says it did.
 
 ## Repo layout
 
 ```
 CLAUDE.md              — this file
-README.md              — user-facing: what this is, setup, current status
+README.md              — user-facing: what this is, setup, interop, limits
 NOTICE                 — attribution for patterns adapted from evdev/hubitat-modern-dashboard (Apache 2.0)
 app/
-  HubitatNativeDashboard.groovy   — the spike App: OAuth, mappings, Maker API proxy, minimal test page
+  HubitatNativeDashboard.groovy   — the App: OAuth, mappings, asset serving, Maker API proxy, config API
+build/
+  build.mjs            — reads upstream frontend, patches, chunks, enforces size ceilings
+  patches.mjs          — the seven asserted transport patches (the whole Cloudflare-vs-hub delta)
+  dev-server.mjs       — local stand-in for the app; simulation, not the real thing
+  check-groovy.groovy  — compile the app without a hub
+dist/                  — build output, gitignored (it is transformed upstream code)
 ```
-
-## Boundary with cf-hubitat-dashboard (read this before touching either repo)
-
-- Do not copy code, config, or conventions from cf-hubitat-dashboard into this repo without the maintainer asking — this repo's whole purpose is to be tested in isolation.
-- Do not push changes from this repo into cf-hubitat-dashboard, or vice versa, without an explicit instruction to do so.
-- If a future session is asked to "port this spike back" or "apply what we learned here to the real dashboard," that is a cf-hubitat-dashboard task — go read *that* repo's CLAUDE.md fresh rather than assuming this file's contents transfer directly. Some things will transfer (the verified Groovy patterns above); most of the actual code will not (this spike's minimal test page is not the real dashboard's tile system).
 
 ## Status
 
-Spike in progress. See README.md for the current concrete test plan (what to paste where, what to check) and results once the maintainer has tried it on a real hub.
+The Maker API proxy, device listing, command dispatch and both dashboard links are **confirmed working on a real hub**. The full frontend, the chunked build and the transport patches are **confirmed working in a browser** against `dev-server.mjs`. The rewritten Groovy app — asset serving, the `hub` proxy, the config API — **has not been run on a hub yet**. See README.md for the verification table and what remains.

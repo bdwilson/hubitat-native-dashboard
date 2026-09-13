@@ -1,103 +1,138 @@
-# Hubitat Native Dashboard — spike
+# Hubitat Native Dashboard
 
-**Proof of concept — not a real dashboard, but the core mechanism is now confirmed working end-to-end on a real hub: device listing, command proxying, and the cloud URL all work.**
+**An on-hub port of [bdwilson/cf-hubitat-dashboard](https://github.com/bdwilson/cf-hubitat-dashboard) — the same dashboard, served entirely from the Hubitat hub.** No Cloudflare account, no Worker, no KV, no external hosting.
 
-This repo exists to answer one question:
-
-> Can a Hubitat dashboard run **entirely on the hub** — no Cloudflare, no external hosting, no separate cloud account — by wrapping Hubitat's existing **Maker API** from inside a native, OAuth-enabled Hubitat App?
-
-It is deliberately separate from [bdwilson/cf-hubitat-dashboard](https://github.com/bdwilson/cf-hubitat-dashboard) (the actual production dashboard, Cloudflare Worker + KV). Nothing here is wired into that project, and this experiment should not disturb it.
-
-## The idea
-
-A Hubitat App can make HTTP calls to any URL — including its own hub, on `127.0.0.1:8080`. So instead of reimplementing device access, capability detection, and command dispatch in Groovy from scratch, this App acts as a **thin proxy** in front of an existing Maker API instance:
+It runs the *same frontend* as the Cloudflare build. Only the transport layer differs: device access goes through an existing Maker API instance on the hub, and config lives in the app's own `state` instead of KV. Because the config format is identical, **a config exported from either dashboard imports into the other.**
 
 ```
 Browser ──OAuth token──► This App (on the hub)
                               │
-                              └──httpGet 127.0.0.1:8080──► Maker API (same hub)
-                                                          │
-                                                          └──► your devices
+                              ├──httpGet 127.0.0.1:8080──► Maker API (same hub) ──► your devices
+                              │
+                              └──httpGet 127.0.0.1:8080──► File Manager (the UI files)
 ```
 
-The payoff, if it works: the JSON shape and command URL shape stay *exactly* what Maker API already produces — which is exactly what the production dashboard's frontend already speaks. In principle, most of that frontend's device logic could run against this backend unchanged, with only the transport layer swapped.
+## Why there's a build step
 
-## What's here
+Two hard platform ceilings make it impossible to just paste the dashboard into an app:
 
-```
-app/HubitatNativeDashboard.groovy   the spike App — OAuth, routes, Maker API proxy,
-                                    and a minimal HTML test page
-CLAUDE.md                           full context for AI-assisted development
-NOTICE                              attribution for patterns adapted from
-                                    evdev/hubitat-modern-dashboard (Apache 2.0)
-```
+- **File Manager caps a single file at 124 KB.**
+- **Hubitat Cloud caps a single response at roughly 128 KB.**
 
-The test page is intentionally minimal — it lists your devices and toggles switches. That's it. It exists to isolate whether the *mechanism* works, not to look like a dashboard.
+The upstream dashboard is one ~280 KB HTML file. So `build/build.mjs` splits it into a shell plus JS chunks, each kept under both ceilings, and **fails the build** if any piece grows past them. The app re-serves those chunks through its own routes; the browser refetches them as text and runs them as the original single program. [evdev/hubitat-modern-dashboard](https://github.com/evdev/hubitat-modern-dashboard) hit the same wall and solved it the same way.
+
+The frontend is **not vendored into this repo.** The build reads it from a sibling checkout of `cf-hubitat-dashboard` or fetches it from GitHub, so there is no second copy of that project's code here to drift out of sync.
 
 ## Setup
 
-You need a Maker API instance first. If you already run one (for Alexa, HomeBridge, etc.), you can reuse it.
+You need a Maker API instance first. If you already run one (Alexa, HomeBridge, etc.), reuse it.
 
-1. **Maker API** — Apps → Add Built-in App → Maker API. Select the devices you want available. Note the **App ID** and **Access Token** from its page.
-2. **This app** — Apps Code → New App → paste `app/HubitatNativeDashboard.groovy` → **Save**.
-3. Click **OAuth** at the top of the code editor → **Enable OAuth** → **Save**. (Required — the dashboard link won't work without it.)
-4. Apps → **Add User App** → *Hubitat Native Dashboard (spike)*.
-5. Paste the Maker API **App ID** and **Access Token** → **Done**.
-6. Reopen the app — it shows **Local** and **Cloud** dashboard links.
+1. **Maker API** — Apps → Add Built-in App → Maker API. Select the devices you want on the dashboard. Note its **App ID** and **Access Token**.
 
-## What to check when testing
+2. **Build the UI** (needs Node 18+):
+   ```sh
+   node build/build.mjs
+   ```
+   Reads `../cf-hubitat-dashboard/src/assets/index.html` if you have that repo checked out next to this one; otherwise fetches it from GitHub. Override with `--source <path-or-url>`.
 
-These are the interesting failure points, roughly in the order they'd bite:
+3. **Upload** every file from `dist/` to the hub: **Settings → File Manager**.
 
-| Check | What it tells us | Status |
+4. **Install the app** — Apps Code → New App → paste `app/HubitatNativeDashboard.groovy` → **Save**. Then click **OAuth** → **Enable OAuth** → **Save**. (Required; the dashboard link won't work without it.)
+
+5. Apps → **Add User App** → *Hubitat Native Dashboard*. Paste the Maker API **App ID** and **Access Token** → **Done**.
+
+6. Reopen the app. It shows whether it can see the UI files, plus the **Local** and **Cloud** dashboard links.
+
+To update later: re-run the build, re-upload `dist/`, and use the app's **Import** button (its `importUrl` points at this repo) to pull the newest Groovy.
+
+## Config interop with the Cloudflare dashboard
+
+Both dashboards speak the same config JSON, so the frontend's own **Download Config** / **Upload Config** buttons move a setup between them in either direction.
+
+| | Cloudflare build | This build |
 |---|---|---|
-| Does the app **save** in Apps Code without a compile error? | Groovy syntax is valid | ✅ confirmed |
-| Does the app page show Local/Cloud links? | OAuth + `createAccessToken()` worked | ✅ confirmed |
-| Does the **local** link load the page? | `mappings`/`render` routing works | ✅ confirmed |
-| Does it list devices? | **The core question** — internal `httpGet` to Maker API on `127.0.0.1:8080` works | ✅ confirmed — loaded 141 devices |
-| Does toggling a switch work? | Command proxying works | ✅ confirmed |
-| Does the **cloud** link do all of the above? | Hubitat's cloud OAuth proxy passes through correctly | ✅ confirmed |
+| Config store | Workers KV | the app's `state` |
+| Config API | `/api/config` | `config` |
+| Device access | `/api/hub/*` → Maker API | `hub?path=…` → Maker API |
+| Hub credentials | in config (`hub.baseUrl/appId/token`) | app preferences |
 
-If the device list fails, **Logs** in the Hubitat admin UI (filtered to this app) will have the error — `makerApiGet` logs failures with the message. Issues already found and fixed during real-hub testing (see commit history):
-- The embedded test page originally used root-relative fetch URLs (`/devices/all`, `/cmd`), which resolve against the hub's origin root instead of this app's own base path — fixed by making them path-relative.
-- Self-calls need port **8080**, not port 80/443. Two wrong attempts confirmed this: plain `127.0.0.1` (port 80) and `location.hub.localIP` (port 80) both fail with connection refused. Port 80/443 fronts the hub's admin/browser-facing web server; the internal app engine that serves `/apps/api/...` to the hub calling itself listens on 8080/8443. Fixed by using `127.0.0.1:8080`. This matches evdev/hubitat-modern-dashboard's own `hubLoginUri()` (`http://127.0.0.1:8080`), confirmed by reading their actual source.
-- The **cloud** dashboard link returned AWS API Gateway's generic `{"message":"Missing Authentication Token"}` (its standard "no matching route" response) — caused by the link pointing at the bare root `/` instead of `/dashboard`. evdev's own dashboard-link builder always uses `/dashboard`, never a bare-root link, even though its `mappings` block maps both. Fixed by switching both dashboard links and the `mappings` entry to `/dashboard`.
-- **No device ever showed a toggle button, even though 141 devices loaded.** Maker API's `/devices/all` returns `attributes` as a flat object keyed by name (`{"switch":"off"}`), not an array of `{name, currentValue}` objects — the test page's `getAttr()` assumed the array shape, so every lookup silently returned `undefined` and no device was ever detected as having a `switch`. Fixed by reading `device.attributes[name]` directly.
-- **Buttons worked but never showed the new state (or toggled the same direction twice) without a full page reload.** Each button's on/off label and click handler closed over the device list from the last `load()` call; `sendCommand()` never re-fetched or re-rendered after a command succeeded. Fixed by having `sendCommand()` call `load()` again on success, so the device list (and every button) reflects the hub's actual current state after each command.
+Exporting from this app with *include token* writes real, working Maker API credentials (`hub.baseUrl`, `appId`, `token`) into the file, so that export can be imported straight into the Cloudflare dashboard and will connect.
 
-If the device list still fails after these fixes, the most likely remaining culprit is the Maker API App ID/token being wrong.
+Going the other way, **`hub` is deliberately ignored on import here** — this app gets its Maker API credentials from its own settings page, so importing a Cloudflare export brings the layout across without repointing the app at whatever hub URL that export happened to contain.
 
-## Trade-offs of this approach
+## Routes
 
-**Wrapping Maker API (this spike)**
-- Reuses Maker API's JSON and command shapes — the production dashboard's frontend already speaks them
+| Route | Purpose |
+|---|---|
+| `dashboard` | the dashboard page (shell from File Manager) |
+| `asset?f=<name>` | one built UI file, re-served from File Manager |
+| `hub?path=<maker-api-path>` | Maker API proxy |
+| `config` | `GET` / `PUT` / `DELETE` — config, in the Cloudflare build's shape |
+| `status` | JSON diagnostics: assets found, config size, hub IP |
+| `devices/all`, `cmd?id=&c=&v=` | kept from the original spike for isolating a broken proxy |
+
+Sub-paths are passed to `hub` as one URL-encoded query param rather than as path segments, because Hubitat's colon-style path-variable mapping syntax has no verified precedent in shipped code.
+
+## Developing without a hub
+
+```sh
+node build/build.mjs
+node build/dev-server.mjs
+# http://127.0.0.1:8099/apps/api/1/dashboard?access_token=devtoken
+```
+
+`build/dev-server.mjs` stands in for the Groovy app: it implements the same routes, serves the built files, and fakes Maker API device data in its real `/devices/all` shape. It deliberately serves from a base path of the same shape the hub uses (`/apps/api/<appId>/…`), because every URL the dashboard requests is relative — serving from the web root would skip the thing most likely to break.
+
+It is a **simulation, not the app.** A green run proves the built frontend, the chunk loader and the transport patches are sound. It says nothing about whether the Groovy is correct.
+
+For the Groovy itself:
+
+```sh
+apt-get install -y groovy      # 2.4.x, matching Hubitat
+groovy build/check-groovy.groovy app/HubitatNativeDashboard.groovy
+```
+
+That compiles to `CLASS_GENERATION`, which is the phase that catches the errors Hubitat's editor rejects on Save — including `Modifier 'private' not allowed here`, which this repo shipped once and which earlier compiler phases let through. It cannot tell you the app *works*, only that the hub will accept the file.
+
+## What's been verified, and how
+
+| | Status |
+|---|---|
+| Maker API proxy, device listing | ✅ on a real hub (141 devices) |
+| Command proxying, local + cloud links | ✅ on a real hub |
+| Build: patches apply, chunks under both ceilings | ✅ enforced by the build itself |
+| Chunk split/rejoin is byte-exact | ✅ asserted against the patched source |
+| Dashboard boots, renders tiles, drives devices, saves config | ✅ in Chromium against `dev-server.mjs` |
+| Groovy compiles | ✅ Groovy 2.4.21, `CLASS_GENERATION` |
+| **The rewritten Groovy app on a real hub** | ❌ **not yet tested** |
+
+The last row is the important one: the app was rewritten substantially (asset serving, config storage, the `hub` proxy) and has not been run on hardware since. Expect to shake out real-hub issues the way the earlier rounds did.
+
+## Known limits (from the platform, not this app)
+
+- **~128 KB per cloud response.** A large `/devices/all` can exceed this — 141 devices with full attributes is close. It works fine on the local link; on cloud it truncates or fails. The app logs a warning naming the response that went over, because otherwise this shows up as a silently empty dashboard.
+- **Real-time updates are local-only.** The dashboard connects straight to the hub's `ws://<hub>/eventsocket` on the local link — one hop fewer than the Cloudflare build, which has to proxy it. Over the cloud link there is no event socket, so it polls. Same limitation the Cloudflare build has.
+- **App `state` is not unlimited.** Config is capped at 90 KB here; `PUT config` returns a clear 413 rather than letting a too-large write fail obscurely. Many custom dashboards with many tiles could approach it.
+- **No PWA icons.** The build strips the manifest and icon links: there is no static asset origin on the hub, and Hubitat Cloud corrupts binary responses. Installing to a home screen works; it just gets a default icon.
+- **Security is the URL.** Anyone with a dashboard link can control every device exposed through your Maker API instance — the same trust model as Maker API's own URLs. There is no per-user identity here, unlike Cloudflare Access in front of the production dashboard.
+
+## Trade-offs versus reimplementing device access natively
+
+**Wrapping Maker API (this project)**
+- Reuses Maker API's JSON and command shapes, so the production dashboard's frontend runs with only its transport swapped
 - Much less Groovy to write and maintain
-- Requires Maker API to be installed and configured separately (two apps, not one)
+- Requires Maker API installed and configured separately (two apps, not one)
 - Inherits Maker API's **one-argument-per-command** limit
-- Extra HTTP round-trip per request (localhost, so cheap, but not free)
+- Extra HTTP round-trip per request (loopback, so cheap, but not free)
 
-**Reimplementing device access natively** (what [evdev/hubitat-modern-dashboard](https://github.com/evdev/hubitat-modern-dashboard) does)
+**Reimplementing natively** (what [evdev/hubitat-modern-dashboard](https://github.com/evdev/hubitat-modern-dashboard) does)
 - One app, no Maker API dependency, direct in-process device access
 - Can dispatch multi-argument commands that Maker API's URL shape can't express
 - Uses Hubitat's capability-bucketed device pickers, which don't map cleanly onto a "any device, any tile type" dashboard
 - Substantially more Groovy to write and keep working
 
-There's a middle path worth remembering: native device access, but serialize the JSON to *match* Maker API's shape anyway. That drops the Maker API dependency and the one-argument ceiling while keeping frontend compatibility — at the cost of writing that serialization yourself. Not attempted here; wrapping is the smaller first step.
-
-## Known limits (inherited from the platform, not from this spike)
-
-These apply to *any* on-hub dashboard, including this one — they're documented in evdev's project too and were confirmed by reading its source:
-
-- **Hubitat Cloud caps responses at roughly 128 KB.** A large device list can exceed this. Local URL has no such cap.
-- **File Manager caps files at 124 KB.** Any real UI would need to be split across multiple files and served from there — this spike sidesteps that entirely by keeping its test page small enough to embed directly in the Groovy source, which a real dashboard could not do.
-- **Real-time WebSocket updates are local-only.** Hubitat's cloud proxy doesn't expose `eventsocket`. (The production dashboard already has and handles this same limitation.)
-- **Don't serve binary images through Hubitat Cloud** — it corrupts them. Base64-encode and decode server-side, or host externally.
-- **Security is the URL.** Anyone with the dashboard link can control the exposed devices — the same trust model as Maker API's own URLs. There's no per-user identity here, unlike Cloudflare Access in front of the production dashboard.
-
-## Status
-
-**All core checks confirmed working on a real hub**, local and cloud both: device listing (141 real devices), command proxying (toggling a switch), and the cloud dashboard link. Several bugs were found and fixed along the way — a compile error, a root-relative-URL bug, a self-call wrong-port bug, a cloud-link wrong-path bug, a Maker API attributes-shape bug, and a stale-UI-after-command bug (see commit history for each). The spike's core question is answered: yes, a native Hubitat App can proxy an existing Maker API instance to serve a working dashboard entirely from the hub.
+A middle path, if this ever outgrows Maker API: native device access, but serialize the JSON to *match* Maker API's shape anyway. That drops the dependency and the one-argument ceiling while keeping the frontend unchanged — at the cost of writing that serialization yourself.
 
 ## Credits
 
-Groovy platform patterns (internal self-hosted HTTP calls, defensive response-body reading) were adapted from [evdev/hubitat-modern-dashboard](https://github.com/evdev/hubitat-modern-dashboard), Apache 2.0 — see [NOTICE](NOTICE). That project takes a different architectural approach (native device access, no Maker API) and is worth reading if this direction gets built out further.
+Groovy platform patterns (hub self-calls, defensive HTTP response reading, File Manager asset serving) were adapted from [evdev/hubitat-modern-dashboard](https://github.com/evdev/hubitat-modern-dashboard), Apache 2.0 — see [NOTICE](NOTICE). The dashboard frontend is [bdwilson/cf-hubitat-dashboard](https://github.com/bdwilson/cf-hubitat-dashboard), read at build time rather than copied in.

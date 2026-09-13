@@ -1,0 +1,8 @@
+# Built UI assets. Not committed on purpose: dist/ is a transformed copy of
+# cf-hubitat-dashboard's frontend, and committing it would put a second,
+# drifting copy of that project's code in this repo. Rebuild with:
+#   node build/build.mjs
+dist/
+
+node_modules/
+*.log
