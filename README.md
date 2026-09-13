@@ -53,6 +53,19 @@ node build/build.mjs            # sibling checkout, else fetches from GitHub
 node build/build.mjs --source <path-or-url>
 ```
 
+## Version tracking
+
+The app page tells you what's installed and whether it's current:
+
+- **App version** — a constant in the Groovy, shown under *About*.
+- **UI build** — a 10-char id in `hnd-manifest.json`, hashed over the patched upstream source *and* this project's loader/shell generation, so any change that alters the shipped bytes produces a new id.
+- **Update check** — a **Check for updates** button fetches the manifest from the UI source URL and compares build ids: *Up to date*, *Update available: installed X, available Y*, or a failure. Cached for 6 hours; never fetched just because the settings page rendered.
+- **Integrity, not just presence** — the app verifies each installed file is the exact byte size the manifest recorded, and that the shell's own `<!-- hnd-build: … -->` stamp matches the manifest's version.
+
+That last check exists because presence alone is misleading. The shell embeds the chunk list and the `?v=` cache key, so re-uploading *some* files leaves a shell from one build driving chunks from another — everything "present", nothing obviously wrong, and a dashboard that half works. Verified both failure modes (stale chunk, mixed build) are detected.
+
+The `status` route returns all of it as JSON: `appVersion`, `installedUiBuild`, `updateCheck`, `firmware`, `hubFileApi`, plus config size and hub IP.
+
 ## Differences you'll notice from the Cloudflare build
 
 The frontend is the same, but a few things are adjusted because Cloudflare isn't involved:

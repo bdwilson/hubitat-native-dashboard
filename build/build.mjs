@@ -295,13 +295,32 @@ async function main() {
   );
 
   const { head, js, tail } = splitShellAndScript(patched);
-  const version = createHash('sha256').update(patched).digest('hex').slice(0, 10);
 
   const chunkMax = Math.floor(args.chunkKb * 1024);
   const chunks = chunkByLines(js, chunkMax);
   const chunkNames = chunks.map((_, i) => `hnd-app-${i + 1}.js`);
 
-  const shell = `${head}\n${BOOT_NOTICE}\n${buildLoader(chunkNames, version)}\n${tail}`;
+  // The build id has to cover everything that determines the output, not just
+  // the upstream source: the loader and boot markup are generated here, so
+  // hashing only `patched` would let a change to this file ship different bytes
+  // under an unchanged id — and the app's update check would report "up to date"
+  // for a build that is not. The loader is hashed with a placeholder id to avoid
+  // depending on its own hash.
+  const version = createHash('sha256')
+    .update(patched)
+    .update(BOOT_NOTICE)
+    .update(buildLoader(chunkNames, '__VERSION__'))
+    .digest('hex')
+    .slice(0, 10);
+
+  // A greppable build stamp. The app reads this back out of the INSTALLED shell
+  // and compares it to the installed manifest's version. Without it, uploading a
+  // new shell over old chunks (or vice versa) leaves a mismatched set that still
+  // looks complete — every file present, nothing obviously wrong, a dashboard
+  // that half works. The loader's VERSION is the same value, but it lives in JS
+  // the Groovy side has no business parsing.
+  const stamp = `<!-- hnd-build: ${version} -->`;
+  const shell = `${head}\n${stamp}\n${BOOT_NOTICE}\n${buildLoader(chunkNames, version)}\n${tail}`;
 
   const outDir = path.resolve(REPO_ROOT, args.out);
   await rm(outDir, { recursive: true, force: true });

@@ -56,6 +56,11 @@ preferences {
 // Asset names. These must match what build/build.mjs emits into dist/.
 // ---------------------------------------------------------------------------
 
+// Bump when this file changes in a way users should know about. Surfaced on the
+// settings page and by the `status` route so an installed app can be identified
+// without diffing source.
+private String appVersion() { "1.1.0" }
+
 private String shellFileName() { "hnd-shell.html" }
 private String manifestFileName() { "hnd-manifest.json" }
 
@@ -85,14 +90,28 @@ def mainPage() {
         }
 
         section("Dashboard UI files") {
-            if (state.uiInstallResult) {
-                paragraph "<b>Last install:</b> ${state.uiInstallResult}"
-            }
             def status = assetStatus()
             if (status.ok) {
-                paragraph "<b style='color:#2e7d32'>Found.</b> ${status.message}"
+                paragraph "<b style='color:#2e7d32'>Installed and verified.</b> ${status.message}"
             } else {
-                paragraph "<b style='color:#c62828'>Not found.</b> ${status.message}"
+                paragraph "<b style='color:#c62828'>Problem.</b> ${status.message}"
+            }
+
+            def upd = updateStatus(false)
+            if (!upd.checked) {
+                paragraph "<b>Updates:</b> not checked yet."
+            } else if (!upd.ok) {
+                paragraph "<b style='color:#c62828'>Update check failed.</b> ${upd.message}"
+            } else if (upd.upToDate) {
+                paragraph "<b style='color:#2e7d32'>Up to date.</b> ${upd.message}"
+            } else {
+                paragraph "<b style='color:#ef6c00'>Update available.</b> ${upd.message}" +
+                    (upd.builtAt ? "<br><span style='font-size:12px'>Built ${upd.builtAt}</span>" : "")
+            }
+            input "checkUpdates", "button", title: "Check for updates"
+
+            if (state.uiInstallResult) {
+                paragraph "<span style='font-size:12px'><b>Last install:</b> ${state.uiInstallResult}</span>"
             }
             if (hasHubFileApi()) {
                 paragraph "Click below to download the built UI and write it into this hub's " +
@@ -133,6 +152,13 @@ def mainPage() {
             paragraph "Stored config size: ${storedConfigBytes()} bytes."
             input "resetConfig", "bool", title: "Wipe stored dashboard config on Done (Maker API credentials are kept)", defaultValue: false
         }
+
+        section("About") {
+            def st = assetStatus()
+            paragraph "<span style='font-size:12px'>App version <b>${appVersion()}</b> &middot; " +
+                "UI build <b>${st.installedVersion ?: 'not installed'}</b> &middot; " +
+                "hub firmware ${location?.hub?.firmwareVersionString}</span>"
+        }
     }
 }
 
@@ -142,12 +168,20 @@ def appButtonHandler(String btn) {
         state.remove("assetStatusAt")
     } else if (btn == "installUi") {
         def result = installUiFiles()
-        state.uiInstallResult = result.message
+        state.uiInstallResult = "${result.message} (${new Date().format('yyyy-MM-dd HH:mm', location.timeZone)})"
+        // The installed build just changed, so both cached answers are stale.
+        state.remove("assetStatusCache")
+        state.remove("assetStatusAt")
+        state.remove("updateCheckJson")
+        state.remove("updateCheckAt")
         if (result.ok) {
             log.info "Dashboard UI install: ${result.message}"
         } else {
             log.error "Dashboard UI install failed: ${result.message}"
         }
+    } else if (btn == "checkUpdates") {
+        def upd = updateStatus(true)
+        log.info "Dashboard UI update check: ${upd.message}"
     }
 }
 
@@ -169,28 +203,160 @@ private Map assetStatus() {
     return result
 }
 
+// Checks the installed UI is not just present but internally consistent:
+//
+//  - every file the manifest lists actually exists, and
+//  - each one is the size the manifest recorded at build time, and
+//  - the shell's own build stamp matches the manifest's version.
+//
+// Presence alone is not enough. Re-uploading some files and not others leaves a
+// shell from one build driving chunks from another: the shell embeds the chunk
+// list and the ?v= cache key, so the mismatch produces a dashboard that loads
+// and then misbehaves, with nothing obviously missing to point at.
 private Map assetStatusUncached() {
     def shell = fetchLocalAsset(shellFileName())
     if (!shell) {
-        return [ok: false, message: "${shellFileName()} is not in File Manager yet."]
+        return [ok: false, installedVersion: null,
+                message: "${shellFileName()} is not in File Manager yet."]
     }
+
     def manifestRaw = fetchLocalAsset(manifestFileName())
-    def version = "unknown"
-    def chunks = []
-    if (manifestRaw) {
-        try {
-            def m = new groovy.json.JsonSlurper().parseText(manifestRaw)
-            version = m?.version ?: "unknown"
-            chunks = (m?.chunks instanceof List) ? m.chunks : []
-        } catch (e) {
-            log.warn "Could not parse ${manifestFileName()}: ${e.message}"
+    if (!manifestRaw) {
+        return [ok: false, installedVersion: null,
+                message: "${shellFileName()} is installed but ${manifestFileName()} is missing, so its build " +
+                    "cannot be identified or verified. Re-install the UI."]
+    }
+
+    def m
+    try {
+        m = new groovy.json.JsonSlurper().parseText(manifestRaw)
+    } catch (e) {
+        return [ok: false, installedVersion: null,
+                message: "${manifestFileName()} is not valid JSON (${e.message}). Re-install the UI."]
+    }
+
+    def version = (m?.version ?: "unknown").toString()
+    def chunks = (m?.chunks instanceof List) ? m.chunks*.toString() : []
+    def sizes = (m?.bytes instanceof Map) ? m.bytes : [:]
+
+    def problems = []
+
+    def stamp = shellBuildStamp(shell)
+    if (stamp && stamp != version) {
+        problems << "${shellFileName()} is from build ${stamp} but the manifest says ${version} — mixed builds"
+    } else if (!stamp) {
+        problems << "${shellFileName()} has no build stamp (built by an older version of build.mjs)"
+    }
+
+    ([shellFileName()] + chunks).each { name ->
+        def expected = sizes[name]
+        def actual = (name == shellFileName()) ? byteLength(shell) : assetByteLength(name)
+        if (actual == 0) {
+            problems << "${name} is missing"
+        } else if (expected instanceof Number && actual != (expected as Integer)) {
+            problems << "${name} is ${actual} bytes, expected ${expected} — stale or truncated"
         }
     }
-    def missing = chunks.findAll { !fetchLocalAsset(it.toString()) }
-    if (missing) {
-        return [ok: false, message: "Shell found (build ${version}) but these chunks are missing: ${missing.join(', ')}."]
+
+    if (problems) {
+        return [ok: false, installedVersion: version,
+                message: "Build ${version} has problems: ${problems.join('; ')}."]
     }
-    return [ok: true, message: "Build ${version}, ${chunks.size()} JS chunk(s), all present."]
+    return [ok: true, installedVersion: version,
+            message: "Build ${version}, ${chunks.size()} JS chunk(s), all present and the expected size."]
+}
+
+private String shellBuildStamp(String shell) {
+    def m = (shell =~ /<!--\s*hnd-build:\s*([A-Za-z0-9]+)\s*-->/)
+    return m.find() ? m.group(1) : null
+}
+
+private int byteLength(String s) {
+    s ? s.getBytes("UTF-8").length : 0
+}
+
+// Byte length of an installed file. Uses downloadHubFile's byte array directly
+// where available so multi-byte characters (the UI has plenty) are counted the
+// way the build counted them, rather than as String length.
+private int assetByteLength(String name) {
+    if (hasHubFileApi()) {
+        try {
+            byte[] data = downloadHubFile(name)
+            return data == null ? 0 : data.length
+        } catch (e) {
+            return 0
+        }
+    }
+    return byteLength(fetchLocalAsset(name))
+}
+
+// ---------------------------------------------------------------------------
+// Update checking: compare the installed build against the one at uiSourceUrl.
+// ---------------------------------------------------------------------------
+
+private int updateCheckMaxAgeMs() { 21600000 }  // 6 hours
+
+private Map updateStatus(Boolean force = false) {
+    def age = now() - ((state.updateCheckAt ?: 0) as Long)
+    if (!force && state.updateCheckJson && age < updateCheckMaxAgeMs()) {
+        try {
+            def cached = new groovy.json.JsonSlurper().parseText(state.updateCheckJson.toString())
+            if (cached instanceof Map) return cached
+        } catch (e) { /* fall through and re-check */ }
+    }
+    if (!force) {
+        // Never reach out just because the settings page was rendered. An update
+        // check is a network call; it happens on the button, or once the cached
+        // answer has gone stale.
+        if (state.updateCheckJson) {
+            try {
+                def cached = new groovy.json.JsonSlurper().parseText(state.updateCheckJson.toString())
+                if (cached instanceof Map) return cached
+            } catch (e) { }
+        }
+        return [checked: false, message: "Not checked yet."]
+    }
+
+    def raw = httpGetText("${uiSourceUrl()}/${manifestFileName()}")
+    if (!raw) {
+        def result = [checked: true, ok: false,
+                      message: "Could not reach ${uiSourceUrl()} to check for updates."]
+        state.updateCheckJson = groovy.json.JsonOutput.toJson(result)
+        state.updateCheckAt = now()
+        return result
+    }
+
+    def available = "unknown"
+    def builtAt = null
+    try {
+        def m = new groovy.json.JsonSlurper().parseText(raw)
+        available = (m?.version ?: "unknown").toString()
+        builtAt = m?.builtAt
+    } catch (e) {
+        def result = [checked: true, ok: false, message: "Remote ${manifestFileName()} is not valid JSON: ${e.message}"]
+        state.updateCheckJson = groovy.json.JsonOutput.toJson(result)
+        state.updateCheckAt = now()
+        return result
+    }
+
+    def installed = assetStatus()?.installedVersion
+    def upToDate = (installed != null && installed == available)
+    def result = [
+        checked  : true,
+        ok       : true,
+        installed: installed,
+        available: available,
+        builtAt  : builtAt,
+        upToDate : upToDate,
+        message  : installed == null
+            ? "No UI installed. Build ${available} is available."
+            : (upToDate
+                ? "Up to date (build ${available})."
+                : "Update available: installed ${installed}, available ${available}."),
+    ]
+    state.updateCheckJson = groovy.json.JsonOutput.toJson(result)
+    state.updateCheckAt = now()
+    return result
 }
 
 def installed() { initialize() }
@@ -441,15 +607,22 @@ def deleteConfig() {
 
 def renderStatus() {
     def status = assetStatus()
+    def upd = updateStatus(false)
     def out = [
-        app          : "hubitat-native-dashboard",
-        assetsOk     : status.ok,
-        assets       : status.message,
-        makerApiAppId: settings?.makerApiAppId ?: "",
-        hasMakerToken: (settings?.makerApiToken ? true : false),
-        configBytes  : storedConfigBytes(),
-        configLimit  : maxConfigBytes(),
-        hubLocalIp   : location?.hub?.localIP,
+        app             : "hubitat-native-dashboard",
+        appVersion      : appVersion(),
+        firmware        : location?.hub?.firmwareVersionString,
+        hubFileApi      : hasHubFileApi(),
+        assetsOk        : status.ok,
+        assets          : status.message,
+        installedUiBuild: status.installedVersion,
+        uiSourceUrl     : uiSourceUrl(),
+        updateCheck     : upd,
+        makerApiAppId   : settings?.makerApiAppId ?: "",
+        hasMakerToken   : (settings?.makerApiToken ? true : false),
+        configBytes     : storedConfigBytes(),
+        configLimit     : maxConfigBytes(),
+        hubLocalIp      : location?.hub?.localIP,
     ]
     render contentType: "application/json",
         data: groovy.json.JsonOutput.toJson(out), status: 200, headers: noStoreHeaders()
