@@ -30,7 +30,27 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { applyPatches } from './patches.mjs';
+import { applyPatches, applyRelabels } from './patches.mjs';
+import { createZip } from './zip.mjs';
+
+/**
+ * Hubitat bundle identity. A bundle is a flat ZIP of `<namespace>.<Name>.groovy`
+ * files plus install.txt/update.txt, each of which is:
+ *   line 1: namespace
+ *   line 2: bundle name
+ *   line 3+: `app|driver|library <file> [oauthClientId] [oauthClientSecret]`
+ * Confirmed by unpacking real published bundles, not from documentation.
+ *
+ * The OAuth client id/secret fields are deliberately omitted. Bundles *can*
+ * carry them so OAuth arrives pre-enabled, but those credentials would then be
+ * identical for everyone who installs from this repo. Skipping them costs one
+ * click ("OAuth -> Enable OAuth in App") and keeps no shared secret in a public
+ * repository.
+ */
+const BUNDLE_NAMESPACE = 'bdwilson';
+const BUNDLE_NAME = 'Hubitat Native Dashboard';
+const APP_SOURCE = 'app/HubitatNativeDashboard.groovy';
+const BUNDLE_APP_FILE = 'bdwilson.HubitatNativeDashboard.groovy';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -178,6 +198,48 @@ function buildLoader(chunkNames, version) {
     }
   }
 
+  // Hide the Hub Connection credential fields. On this build the Maker API URL,
+  // app ID and token come from the App's own settings page on the hub, so these
+  // inputs are inert and misleading.
+  //
+  // They are HIDDEN, not removed: the upstream code reads these elements by id
+  // in readSettingsForm() and on import, so deleting them would turn a cosmetic
+  // cleanup into a null-dereference. Hiding keeps every code path intact.
+  //
+  // Note this cannot simply hide "everything between the Hub Connection heading
+  // and the next one" — upstream puts the display settings and the save buttons
+  // in that same stretch, with no heading of their own.
+  function hideHubConnectionFields() {
+    try {
+      var ids = ['cfg-url', 'cfg-app', 'cfg-token', 'cfg-is-cloud'];
+      for (var i = 0; i < ids.length; i++) {
+        var el = document.getElementById(ids[i]);
+        var row = el && el.closest ? el.closest('.form-row') : null;
+        if (row) row.style.display = 'none';
+      }
+      var modal = document.getElementById('settings-modal');
+      if (!modal) return;
+      var h3s = modal.getElementsByTagName('h3');
+      for (var j = 0; j < h3s.length; j++) {
+        if ((h3s[j].textContent || '').trim() === 'Hub Connection') {
+          h3s[j].style.display = 'none';
+          break;
+        }
+      }
+      // The panel's opening blurb explains browser-vs-Worker credential storage,
+      // which does not apply here.
+      var card = modal.querySelector('.modal-card');
+      var firstHelp = card ? card.querySelector('.help') : null;
+      if (firstHelp && /credential|token/i.test(firstHelp.textContent || '')) {
+        firstHelp.textContent =
+          'Tiles, layout and visibility are stored on the hub by this app. ' +
+          'Maker API credentials are configured on the app\\'s own settings page in Hubitat.';
+      }
+    } catch (e) {
+      console.warn('native UI tweak skipped', e);
+    }
+  }
+
   Promise.all(PARTS.map(function (name) {
     return fetch(assetUrl(name)).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status + ' loading ' + name);
@@ -190,6 +252,7 @@ function buildLoader(chunkNames, version) {
     // <script> would have. The rejoined text is byte-identical to upstream's
     // program, so behaviour matches the Cloudflare build.
     (0, eval)(texts.join('\\n'));
+    hideHubConnectionFields();
   }).catch(function (e) {
     fail('Could not load the dashboard code from the hub.', e && e.message);
   });
@@ -218,8 +281,18 @@ async function main() {
   const upstreamHash = createHash('sha256').update(raw).digest('hex').slice(0, 12);
   console.log(`upstream: ${Buffer.byteLength(raw, 'utf8').toLocaleString()} bytes, sha256:${upstreamHash}`);
 
-  const { out: patched, applied } = applyPatches(raw);
+  const { out: transportPatched, applied } = applyPatches(raw);
   console.log(`patches: ${applied.length} applied (${applied.join(', ')})`);
+
+  const { out: patched, counts: relabelCounts } = applyRelabels(transportPatched);
+  const relabelled = relabelCounts.filter((c) => c.hits > 0).length;
+  const missedRelabels = relabelCounts.filter((c) => c.hits === 0);
+  console.log(
+    `relabels: ${relabelled}/${relabelCounts.length} matched` +
+      (missedRelabels.length
+        ? ` (no longer present, harmless: ${missedRelabels.map((c) => JSON.stringify(c.find.slice(0, 28))).join(', ')})`
+        : ''),
+  );
 
   const { head, js, tail } = splitShellAndScript(patched);
   const version = createHash('sha256').update(patched).digest('hex').slice(0, 10);
@@ -239,6 +312,20 @@ async function main() {
     await writeFile(path.join(outDir, name), content, 'utf8');
   }
 
+  // Hubitat bundle: the app code only. Bundles cannot carry File Manager files
+  // (verified by unpacking published bundles — entries are only app/driver/
+  // library), so the UI chunks still have to get there another way: either the
+  // app's own "Install/update dashboard UI" button, or a manual upload.
+  const appSource = await readFile(path.resolve(REPO_ROOT, APP_SOURCE), 'utf8');
+  const bundleManifest =
+    `${BUNDLE_NAMESPACE}\n${BUNDLE_NAME}\napp ${BUNDLE_APP_FILE}\n`;
+  const bundleZip = createZip([
+    { name: BUNDLE_APP_FILE, data: appSource },
+    { name: 'install.txt', data: bundleManifest },
+    { name: 'update.txt', data: bundleManifest },
+  ]);
+  await writeFile(path.join(outDir, 'hubitat-native-dashboard.zip'), bundleZip);
+
   // The app reads this to know what to serve and to reject anything else.
   const manifest = {
     version,
@@ -247,7 +334,9 @@ async function main() {
     builtAt: new Date().toISOString(),
     shell: 'hnd-shell.html',
     chunks: chunkNames,
+    bundle: 'hubitat-native-dashboard.zip',
     patches: applied,
+    relabels: relabelCounts.filter((c) => c.hits > 0).length,
     bytes: Object.fromEntries(files.map(([n, c]) => [n, Buffer.byteLength(c, 'utf8')])),
   };
   await writeFile(path.join(outDir, 'hnd-manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
@@ -283,8 +372,10 @@ async function main() {
   }
 
   console.log(
-    `\nNext: upload every file in ${args.out}/ to Hubitat (Settings -> File Manager),\n` +
-      'then open the dashboard link on the app\'s page.',
+    `\nNext:\n` +
+      `  App code:  install ${args.out}/hubitat-native-dashboard.zip via Bundles, or paste ${APP_SOURCE}.\n` +
+      `  UI files:  use the app's "Install/update dashboard UI" button, or upload the\n` +
+      `             hnd-* files in ${args.out}/ to Settings -> File Manager by hand.`,
   );
 }
 

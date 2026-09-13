@@ -84,6 +84,33 @@ export const PATCHES = [
   },
 
   {
+    name: 'import-syncs-all-settings-inputs',
+    why:
+      'UPSTREAM BUG, reproduced on the Cloudflare build too. applyImportedConfig() ' +
+      'writes the imported values into cfg and syncs SOME settings inputs back ' +
+      '(url, appId, isCloud, hub link, chip accents, theme) but not cfg-title, ' +
+      'cfg-poll, cfg-grid-cols, cfg-tile-h or cfg-icon-scale. readSettingsForm() ' +
+      'runs on the next save and reads all of those straight off the form, so ' +
+      'importing a backup and then saving silently reverts title, poll interval, ' +
+      'grid columns, tile height and icon scale to their pre-import values. ' +
+      'Verified in a browser: import set the page title to the restored name, then ' +
+      'save wrote the OLD title to the server. Fix belongs upstream; patched here ' +
+      'so restore actually restores.',
+    count: 1,
+    find: `  const urlField = document.getElementById('cfg-url');`,
+    replace: `  const syncImportedField = (id, v) => {
+    const el = document.getElementById(id);
+    if (el && v != null) el.value = v;
+  };
+  syncImportedField('cfg-title', cfg.title);
+  syncImportedField('cfg-poll', cfg.pollSec);
+  syncImportedField('cfg-grid-cols', cfg.gridCols);
+  syncImportedField('cfg-tile-h', cfg.tileH);
+  syncImportedField('cfg-icon-scale', cfg.iconScale);
+  const urlField = document.getElementById('cfg-url');`,
+  },
+
+  {
     name: 'websocket-url',
     why:
       'The Worker proxied the hub eventsocket because it sat outside the LAN. This app ' +
@@ -105,6 +132,56 @@ export const PATCHES = [
     replace: "if (location.hostname.includes('cloud.hubitat.com')) { startPolling(); return; }",
   },
 ];
+
+/**
+ * Cosmetic relabels: user-visible wording that names Cloudflare/KV, which do not
+ * exist in this build.
+ *
+ * These are deliberately NOT asserted, unlike PATCHES above. A patch that stops
+ * matching means the network layer is broken and the build must fail. A relabel
+ * that stops matching just means a button says "KV" — worth fixing, never worth
+ * blocking a build over. So these are replace-all, best-effort, and the build
+ * reports how many landed.
+ *
+ * This matters more than it sounds: the "Save Config to KV" button is what
+ * actually writes config to the hub's app state on this build, and a user who
+ * reads that label as "Cloudflare thing I don't have" will leave their config
+ * stranded in one browser's localStorage.
+ *
+ * Order matters — longer, more specific phrases first.
+ */
+export const RELABELS = [
+  ['☁ Save Config to KV', '💾 Save Config to Hub'],
+  // "Save to Browser & Test" still saves settings to this browser, but its
+  // useful effect here is reloading the device list and proving Maker API
+  // works — and the credential fields it implies you just filled in are hidden
+  // on this build.
+  ['Save to Browser &amp; Test', 'Reload Devices &amp; Test'],
+  // Upstream refers to that same button by a third name in one runtime message.
+  ['Test &amp; Load Devices', 'Reload Devices &amp; Test'],
+  ['Save Config to KV', 'Save Config to Hub'],
+  ['Save to KV', 'Save to Hub'],
+  ['Wipes all config from KV and browser', 'Wipes all config from the hub and this browser'],
+  ['never sent to Cloudflare KV', 'never sent off the hub'],
+  ['can be saved to KV for cross-device sync', 'can be saved to the hub for cross-device sync'],
+  ['namespaces your config in KV', 'namespaces your config'],
+  ['token in KV (legacy); re-enter to move to browser', 'token stored on the hub; re-enter to change'],
+  ["'✓ in KV'", "'✓ on hub'"],
+  ['Saving to KV…', 'Saving to hub…'],
+  ['✓ Saved to Cloudflare KV.', '✓ Saved to hub.'],
+];
+
+/** Apply the cosmetic relabels, returning counts. Never throws. */
+export function applyRelabels(source) {
+  let out = source;
+  const counts = [];
+  for (const [find, replace] of RELABELS) {
+    const hits = out.split(find).length - 1;
+    if (hits > 0) out = out.split(find).join(replace);
+    counts.push({ find, hits });
+  }
+  return { out, counts };
+}
 
 /**
  * Apply every patch, asserting each matches exactly the expected number of times.

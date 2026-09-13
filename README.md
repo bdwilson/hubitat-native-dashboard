@@ -29,21 +29,37 @@ You need a Maker API instance first. If you already run one (Alexa, HomeBridge, 
 
 1. **Maker API** — Apps → Add Built-in App → Maker API. Select the devices you want on the dashboard. Note its **App ID** and **Access Token**.
 
-2. **Build the UI** (needs Node 18+):
-   ```sh
-   node build/build.mjs
-   ```
-   Reads `../cf-hubitat-dashboard/src/assets/index.html` if you have that repo checked out next to this one; otherwise fetches it from GitHub. Override with `--source <path-or-url>`.
+2. **Install the app code**, either way:
+   - **Bundle** — Settings → **Bundles** → *Import ZIP* → upload [`dist/hubitat-native-dashboard.zip`](dist/). Installs the app code in one step.
+   - **Paste** — Apps Code → New App → paste `app/HubitatNativeDashboard.groovy` → **Save**. (Or use **Import** with this repo's raw URL; the app's `importUrl` is already set for updates.)
 
-3. **Upload** every file from `dist/` to the hub: **Settings → File Manager**.
+3. **Enable OAuth** — in Apps Code, click **OAuth** → **Enable OAuth in App** → **Update**. Required; the dashboard links won't work without it. (Bundles *can* ship OAuth pre-enabled, but that would bake one shared OAuth client secret into every install from this repo, so this one doesn't.)
 
-4. **Install the app** — Apps Code → New App → paste `app/HubitatNativeDashboard.groovy` → **Save**. Then click **OAuth** → **Enable OAuth** → **Save**. (Required; the dashboard link won't work without it.)
+4. Apps → **Add User App** → *Hubitat Native Dashboard*. Paste the Maker API **App ID** and **Access Token** → **Done**.
 
-5. Apps → **Add User App** → *Hubitat Native Dashboard*. Paste the Maker API **App ID** and **Access Token** → **Done**.
+5. **Install the UI.** Reopen the app and click **"Install / update dashboard UI"**. It downloads the built files and writes them into File Manager itself.
+   - Needs hub firmware **2.3.4.134+** (for `uploadHubFile()`). Older hubs: upload the `hnd-*` files from `dist/` to **Settings → File Manager** by hand — the app page tells you if this applies.
+   - This is the only moment anything is fetched from outside the hub. Afterwards, serving, device access and config are all local.
+   - Point **UI source URL** at your own host if you'd rather not fetch from GitHub.
 
-6. Reopen the app. It shows whether it can see the UI files, plus the **Local** and **Cloud** dashboard links.
+6. Reopen the app for the **Local** and **Cloud** dashboard links.
 
-To update later: re-run the build, re-upload `dist/`, and use the app's **Import** button (its `importUrl` points at this repo) to pull the newest Groovy.
+**Updating:** re-run `node build/build.mjs` (only needed if you changed the frontend), then use **Import** in Apps Code for the Groovy and the **Install / update dashboard UI** button for the UI.
+
+`dist/` is committed on purpose — the self-install button fetches those files from this repo. Regenerate it whenever `cf-hubitat-dashboard`'s frontend changes:
+
+```sh
+node build/build.mjs            # sibling checkout, else fetches from GitHub
+node build/build.mjs --source <path-or-url>
+```
+
+## Differences you'll notice from the Cloudflare build
+
+The frontend is the same, but a few things are adjusted because Cloudflare isn't involved:
+
+- **"💾 Save Config to Hub"** is what upstream calls *Save Config to KV*. It writes to the app's `state` on your hub. **Closing the settings panel only saves to that browser** — click this to make a layout visible on your phone and every other device.
+- **The Hub Connection fields are hidden.** Maker API URL/app ID/token come from the app's settings page in Hubitat, so those inputs are inert here. They're hidden rather than deleted, since upstream's code still reads them.
+- **Every other "KV"/"Cloudflare" label** is rewritten to say hub.
 
 ## Config interop with the Cloudflare dashboard
 
@@ -103,8 +119,17 @@ That compiles to `CLASS_GENERATION`, which is the phase that catches the errors 
 | Build: patches apply, chunks under both ceilings | ✅ enforced by the build itself |
 | Chunk split/rejoin is byte-exact | ✅ asserted against the patched source |
 | Dashboard boots, renders tiles, drives devices, saves config | ✅ in Chromium against `dev-server.mjs` |
+| Config backup → restore → save round-trip | ✅ in Chromium (caught a real bug — see below) |
+| "Save Config to Hub" button persists server-side | ✅ in Chromium (PUT issued, config read back) |
+| Bundle ZIP is a valid archive, matches the real bundle layout | ✅ unpacked with `unzip`, app file byte-identical |
 | Groovy compiles | ✅ Groovy 2.4.21, `CLASS_GENERATION` |
-| **The rewritten Groovy app on a real hub** | ❌ **not yet tested** |
+| **The rewritten Groovy app on a real hub** | ⚠️ **partly** — Maker API proxy, listing, commands and both links confirmed; asset serving, config API and self-install not yet |
+
+### An upstream bug this shook out
+
+Testing restore end-to-end surfaced a bug **that affects the Cloudflare build too**: `applyImportedConfig()` writes imported values into `cfg` and syncs *some* settings inputs back to the form, but not `cfg-title`, `cfg-poll`, `cfg-grid-cols`, `cfg-tile-h` or `cfg-icon-scale`. Since `readSettingsForm()` reads all of those straight off the form on the next save, **importing a backup and then saving silently reverts those five settings** to their pre-import values. Observed directly: import set the page title to the restored name, then save wrote the *old* title to the server.
+
+The `import-syncs-all-settings-inputs` patch fixes it here. The real fix belongs in cf-hubitat-dashboard, which this repo deliberately does not push to.
 
 The last row is the important one: the app was rewritten substantially (asset serving, config storage, the `hub` proxy) and has not been run on hardware since. Expect to shake out real-hub issues the way the earlier rounds did.
 

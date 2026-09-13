@@ -137,9 +137,27 @@ The user uploads `dist/` to File Manager; the app re-serves those files through 
 
 The upstream app is one big IIFE. Splitting it across `<script>` tags would tear functions in half. Instead the loader fetches each chunk **as text**, concatenates, and runs one indirect `eval`. The rejoined text is byte-identical to the patched original (asserted during development), so the browser parses exactly the upstream program. It also costs zero escaping overhead, unlike wrapping each chunk in a string literal.
 
+### Getting the code and the UI onto a hub
+
+Two mechanisms, and it matters which does what:
+
+- **Bundles** (`dist/hubitat-native-dashboard.zip`, built by `build/build.mjs`). A bundle is a **flat ZIP** of `<namespace>.<Name>.groovy` files plus `install.txt`/`update.txt`, each of which is: line 1 namespace, line 2 bundle name, then `app|driver|library <file> [oauthClientId] [oauthClientSecret]`. **Verified by unpacking real published bundles** (thebearmay's webCoRE/AirThings/secureLogin), not from documentation — docs2.hubitat.com is blocked from this environment.
+  - **A bundle CANNOT carry File Manager files.** Entry types are only app/driver/library; no published bundle examined contained anything but Groovy and the two manifests. So bundles solve app-code install and nothing about the UI chunks.
+  - The OAuth client id/secret fields are **deliberately left empty**. They would otherwise be one shared secret across every install from this public repo, to save a single click.
+- **Self-install** (`installUiFiles()` in the app). Hubitat exposes built-in `uploadHubFile(name, bytes)` / `downloadHubFile(name)` since **2.3.4.134**, so the app writes its own File Manager files. This is why `dist/` is **committed**: the button fetches those files from this repo's raw GitHub URLs.
+  - This is the only outbound call the project ever makes, and only on a button press. Runtime stays entirely local. `uiSourceUrl` lets a user point it elsewhere.
+  - `downloadHubFile()` is also now the preferred *read* path, falling back to the HTTP self-call on older firmware.
+
 ### The transport seam
 
-Everything that differs between the Cloudflare build and this one lives in `build/patches.mjs` — seven asserted find/replace patches. Each **must** match exactly once or the build fails loudly, because these patterns match code in a repo this one does not control.
+Everything that differs between the Cloudflare build and this one lives in `build/patches.mjs`, in two deliberately different categories:
+
+- **`PATCHES`** — semantic. Asserted: each **must** match exactly once or the build fails loudly, because these patterns match code in a repo this one does not control and a silent miss means a broken network layer.
+- **`RELABELS`** — cosmetic wording (KV/Cloudflare → hub). Best-effort replace-all; a miss is reported, never fatal. A button saying the wrong word is not worth blocking a build over.
+
+Do not move an item between those categories casually. The one that bit a user: "Save Config to KV" is the button that writes to the hub's app state on this build, and read as a Cloudflare feature it looks skippable — which strands config in one browser's localStorage.
+
+The Hub Connection credential inputs are **hidden at runtime by the loader, not deleted**, because upstream reads those elements by id in `readSettingsForm()` and on import. Deleting them converts a cosmetic cleanup into a null-dereference. Note also that they cannot be hidden by "everything between the Hub Connection heading and the next heading" — upstream puts the display settings and the save buttons in that same stretch with no heading of their own.
 
 | What | Cloudflare | Here |
 |---|---|---|
@@ -148,6 +166,8 @@ Everything that differs between the Cloudflare build and this one lives in `buil
 | Event socket | Worker proxies `/api/hub/events` | browser hits `ws://<hub>/eventsocket` directly |
 | Cloud detection | configured hub URL | `location.hostname` — how the *browser* reached the page |
 | PWA manifest/icons | Worker static assets | stripped (no asset origin; cloud corrupts binaries) |
+
+One patch, `import-syncs-all-settings-inputs`, is **not** a transport change — it fixes a real upstream bug. `applyImportedConfig()` syncs only some settings inputs back to the form, so `readSettingsForm()` on the next save reverts title, poll interval, grid columns, tile height and icon scale to their pre-import values. This breaks restore on the Cloudflare build too. The proper fix belongs upstream; if it lands there, this patch will stop matching and the build will say so.
 
 Sub-paths go in a query param because Hubitat's colon-style path-variable mapping syntax has no verified precedent in shipped code.
 
@@ -171,11 +191,13 @@ NOTICE                 — attribution for patterns adapted from evdev/hubitat-m
 app/
   HubitatNativeDashboard.groovy   — the App: OAuth, mappings, asset serving, Maker API proxy, config API
 build/
-  build.mjs            — reads upstream frontend, patches, chunks, enforces size ceilings
-  patches.mjs          — the seven asserted transport patches (the whole Cloudflare-vs-hub delta)
+  build.mjs            — reads upstream frontend, patches, chunks, enforces size ceilings, builds the bundle
+  patches.mjs          — asserted transport PATCHES + best-effort cosmetic RELABELS
+  zip.mjs              — dependency-free store-only ZIP writer, for the bundle
   dev-server.mjs       — local stand-in for the app; simulation, not the real thing
   check-groovy.groovy  — compile the app without a hub
-dist/                  — build output, gitignored (it is transformed upstream code)
+dist/                  — COMMITTED build output: the UI chunks the app self-installs from,
+                         plus the Hubitat bundle ZIP
 ```
 
 ## Status

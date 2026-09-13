@@ -1,8 +1,7 @@
-# Built UI assets. Not committed on purpose: dist/ is a transformed copy of
-# cf-hubitat-dashboard's frontend, and committing it would put a second,
-# drifting copy of that project's code in this repo. Rebuild with:
-#   node build/build.mjs
-dist/
+# dist/ IS committed. It is the distribution: the app's "Install / update
+# dashboard UI" button fetches those files from this repo over raw.githubusercontent,
+# so they have to exist here. Regenerate with `node build/build.mjs` whenever
+# cf-hubitat-dashboard's frontend changes.
 
 node_modules/
 *.log

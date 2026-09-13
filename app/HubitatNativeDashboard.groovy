@@ -85,13 +85,27 @@ def mainPage() {
         }
 
         section("Dashboard UI files") {
+            if (state.uiInstallResult) {
+                paragraph "<b>Last install:</b> ${state.uiInstallResult}"
+            }
             def status = assetStatus()
             if (status.ok) {
                 paragraph "<b style='color:#2e7d32'>Found.</b> ${status.message}"
             } else {
                 paragraph "<b style='color:#c62828'>Not found.</b> ${status.message}"
-                paragraph "Build the UI with <code>node build/build.mjs</code>, then upload " +
-                    "every file from <code>dist/</code> to <b>Settings -> File Manager</b> on this hub."
+            }
+            if (hasHubFileApi()) {
+                paragraph "Click below to download the built UI and write it into this hub's " +
+                    "File Manager. This is the only time anything is fetched from outside the " +
+                    "hub — serving, devices and config are all local afterwards."
+                input "installUi", "button", title: "Install / update dashboard UI"
+                input "uiSourceUrl", "text", title: "UI source URL (blank = this project's GitHub)",
+                    required: false, submitOnChange: false
+            } else {
+                paragraph "This hub runs firmware ${location.hub.firmwareVersionString}. Writing " +
+                    "File Manager files from an app needs 2.3.4.134 or newer, so install the UI by " +
+                    "hand: run <code>node build/build.mjs</code> and upload the <code>hnd-*</code> " +
+                    "files from <code>dist/</code> to <b>Settings -> File Manager</b>."
             }
             input "checkAssets", "button", title: "Re-check File Manager"
         }
@@ -126,6 +140,14 @@ def appButtonHandler(String btn) {
     if (btn == "checkAssets") {
         state.remove("assetStatusCache")
         state.remove("assetStatusAt")
+    } else if (btn == "installUi") {
+        def result = installUiFiles()
+        state.uiInstallResult = result.message
+        if (result.ok) {
+            log.info "Dashboard UI install: ${result.message}"
+        } else {
+            log.error "Dashboard UI install failed: ${result.message}"
+        }
     }
 }
 
@@ -492,14 +514,27 @@ private String makerApiGet(String path) {
     return result
 }
 
-// Read a file out of the hub's own File Manager. Adapted from evdev's
-// fetchLocalAssetUncached() (Apache 2.0 — see NOTICE).
+// Read a file out of the hub's own File Manager.
 //
-// Tries loopback first (the form confirmed working on this hub for /apps/api/)
-// and falls back to the LAN interface (the form evdev uses for /local/), so a
-// difference between those two paths shows up as a log line rather than an
-// empty dashboard.
+// Prefers the platform's built-in downloadHubFile() (Hubitat 2.3.4.134+), which
+// reads the file directly with no HTTP hop at all. Falls back to the self-call
+// pattern adapted from evdev's fetchLocalAssetUncached() (Apache 2.0 — see
+// NOTICE) on older firmware: loopback first (the form confirmed working on this
+// hub for /apps/api/), then the LAN interface (the form evdev uses for /local/),
+// so a difference between those two shows up as a log line rather than an empty
+// dashboard.
 private String fetchLocalAsset(String fileName) {
+    if (hasHubFileApi()) {
+        try {
+            byte[] data = downloadHubFile(fileName)
+            if (data != null && data.length > 0) return new String(data, "UTF-8")
+            return ""
+        } catch (e) {
+            // A missing file throws here; that is an expected state during setup.
+            log.debug "downloadHubFile(${fileName}): ${e.message}"
+            return ""
+        }
+    }
     def body = fetchLocalAssetFrom(hubSelfBase(), fileName)
     if (body) return body
     body = fetchLocalAssetFrom(hubLanBase(), fileName)
@@ -507,6 +542,124 @@ private String fetchLocalAsset(String fileName) {
         log.warn "File Manager read of ${fileName} needed the LAN interface (${hubLanBase()}); loopback returned nothing."
     }
     return body
+}
+
+// uploadHubFile()/downloadHubFile() landed in Hubitat 2.3.4.134. Everything
+// still works without them — reads fall back to an HTTP self-call, and the UI
+// files can be uploaded by hand — but self-install needs the write side.
+private Boolean hasHubFileApi() {
+    return firmwareAtLeast("2.3.4.134")
+}
+
+private Boolean firmwareAtLeast(String wanted) {
+    try {
+        def fw = location.hub.firmwareVersionString?.tokenize(".")*.toInteger()
+        def want = wanted.tokenize(".")*.toInteger()
+        if (!fw) return false
+        for (int i = 0; i < want.size(); i++) {
+            int have = (i < fw.size()) ? fw[i] : 0
+            if (have != want[i]) return have > want[i]
+        }
+        return true
+    } catch (e) {
+        log.warn "Could not parse firmware version '${location.hub.firmwareVersionString}': ${e.message}"
+        return false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Self-install: fetch the built UI files and write them into File Manager.
+//
+// A Hubitat bundle cannot carry File Manager files — bundles hold only app,
+// driver and library code — so without this the UI files have to be uploaded by
+// hand, one at a time. uploadHubFile() lets the app do it itself.
+//
+// This is the one place the project reaches outside the hub, and only when the
+// button is pressed. Once the files are written, nothing external is involved
+// again: serving, device access and config are all local. Point uiSourceUrl at
+// any host (a LAN web server, a local file share) if fetching from GitHub is
+// not wanted, or skip this entirely and upload the files manually.
+// ---------------------------------------------------------------------------
+
+private String defaultUiSourceUrl() {
+    "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/claude/modifier-syntax-error-188-lkzmfi/dist"
+}
+
+private String uiSourceUrl() {
+    def u = (settings?.uiSourceUrl ?: defaultUiSourceUrl()).toString().trim()
+    return u.endsWith("/") ? u[0..-2] : u
+}
+
+def installUiFiles() {
+    if (!hasHubFileApi()) {
+        return [ok: false, message: "This hub runs firmware ${location.hub.firmwareVersionString}. " +
+            "Writing File Manager files from an app needs 2.3.4.134 or newer — upload the hnd-* files by hand instead."]
+    }
+
+    def base = uiSourceUrl()
+    def manifestRaw = httpGetText("${base}/${manifestFileName()}")
+    if (!manifestRaw) {
+        return [ok: false, message: "Could not fetch ${manifestFileName()} from ${base} — check the URL and that this hub has internet access."]
+    }
+
+    def manifest
+    try {
+        manifest = new groovy.json.JsonSlurper().parseText(manifestRaw)
+    } catch (e) {
+        return [ok: false, message: "${manifestFileName()} from ${base} is not valid JSON: ${e.message}"]
+    }
+
+    def wanted = [manifestFileName(), (manifest?.shell ?: shellFileName()).toString()]
+    if (manifest?.chunks instanceof List) wanted.addAll(manifest.chunks*.toString())
+
+    def installed = []
+    def failed = []
+    wanted.unique().each { name ->
+        if (!(name ==~ assetNamePattern())) {
+            failed << "${name} (unexpected file name)"
+            return
+        }
+        def body = (name == manifestFileName()) ? manifestRaw : httpGetText("${base}/${name}")
+        if (!body) {
+            failed << "${name} (download failed)"
+            return
+        }
+        try {
+            uploadHubFile(name, body.getBytes("UTF-8"))
+            installed << name
+        } catch (e) {
+            failed << "${name} (${e.message})"
+        }
+    }
+
+    state.remove("assetStatusCache")
+    state.remove("assetStatusAt")
+
+    if (failed) {
+        return [ok: false, message: "Installed ${installed.size()} file(s); failed: ${failed.join('; ')}"]
+    }
+    return [ok: true, message: "Installed ${installed.size()} file(s) for build ${manifest?.version ?: 'unknown'}: ${installed.join(', ')}"]
+}
+
+// Plain text fetch used only by the installer, for an external URL rather than
+// the hub itself. Kept separate from the File Manager reader so the two cannot
+// be confused: this one is allowed to leave the hub, that one never does.
+private String httpGetText(String url) {
+    def result = ""
+    try {
+        httpGet([uri: url, contentType: "text/plain", textParser: true, timeout: 60, ignoreSSLIssues: true]) { resp ->
+            def code = resp?.status ?: resp?.statusCode
+            if (code == 200 && resp?.data != null) {
+                def data = resp.getData() != null ? resp.getData() : resp.data
+                result = readHttpBody(data)
+            } else {
+                log.warn "httpGetText(${url}): HTTP ${code}"
+            }
+        }
+    } catch (e) {
+        log.error "httpGetText(${url}): ${e.message}"
+    }
+    return result
 }
 
 private String fetchLocalAssetFrom(String base, String fileName) {
