@@ -53,6 +53,20 @@ node build/build.mjs            # sibling checkout, else fetches from GitHub
 node build/build.mjs --source <path-or-url>
 ```
 
+## Per-browser layouts (`&local=1`)
+
+Add `&local=1` to a dashboard link and that browser keeps its own layout: the hub's stored config is **neither read nor written**.
+
+```
+http://<hub>/apps/api/<id>/dashboard?access_token=<token>&local=1
+```
+
+Devices, commands and real-time updates still come from the same hub — only *where the tile layout lives* changes. Use it to hand someone a link to the same hub with a different set of tiles, or to experiment without disturbing the shared dashboard.
+
+In that mode the **Save Config to Hub** button is hidden (it would do nothing while reporting success) and the settings panel says so. Layout is kept in that browser's `localStorage`, so clearing site data loses it — use **Download Config** first if you care about it.
+
+Worth knowing: hiding a device and editing a custom dashboard normally save to the hub on their own, without touching the save button. Local-only mode suppresses those too, so a "local" browser can't quietly rewrite what everyone else sees. Verified: a session in this mode issued zero writes and left the hub's config untouched.
+
 ## Version tracking
 
 The app page tells you what's installed and whether it's current:
@@ -71,6 +85,7 @@ The `status` route returns all of it as JSON: `appVersion`, `installedUiBuild`, 
 The frontend is the same, but a few things are adjusted because Cloudflare isn't involved:
 
 - **"💾 Save Config to Hub"** is what upstream calls *Save Config to KV*. It writes to the app's `state` on your hub. **Closing the settings panel only saves to that browser** — click this to make a layout visible on your phone and every other device.
+- **Every "KV"/"Cloudflare"/"Worker" string a user can see is rewritten**, including runtime prompts — the *Reset Everything* confirmation now says it wipes config "from this browser and from the hub". Function names and code comments keep their upstream spelling; renaming those would be churn with no user-facing benefit.
 - **The Hub Connection fields are hidden.** Maker API URL/app ID/token come from the app's settings page in Hubitat, so those inputs are inert here. They're hidden rather than deleted, since upstream's code still reads them.
 - **Every other "KV"/"Cloudflare" label** is rewritten to say hub.
 

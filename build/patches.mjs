@@ -69,6 +69,47 @@ export const PATCHES = [
   },
 
   {
+    name: 'local-only-mode-flag',
+    why:
+      'Opt-in per-browser mode (?local=1). One hub, one link, but each person can ' +
+      'keep their own layout instead of sharing the one stored on the hub.',
+    count: 1,
+    find: `const STORAGE_KEY = 'hubitat-dash-v4-cache';`,
+    replace: `const STORAGE_KEY = 'hubitat-dash-v4-cache';
+// hubitat-native-dashboard: with ?local=1 this browser keeps its layout to
+// itself — the hub's stored config is neither read nor written. Everything
+// still runs against the same hub and the same devices; only where the tile
+// layout lives changes.
+const HND_LOCAL_ONLY = new URLSearchParams(location.search).get('local') === '1';`,
+  },
+
+  {
+    name: 'local-only-skips-config-read',
+    why:
+      'In local-only mode the hub config must not be loaded, or it would overwrite ' +
+      "this browser's layout on every page load. Throwing is the right signal: " +
+      'boot() already catches a failed config fetch and falls back to the ' +
+      'localStorage cache, which is exactly the wanted behaviour.',
+    count: 1,
+    find: 'async function fetchConfigFromWorker(includeSecrets) {',
+    replace: `async function fetchConfigFromWorker(includeSecrets) {
+  if (HND_LOCAL_ONLY) throw new Error('local-only mode (?local=1) — hub config not loaded');`,
+  },
+
+  {
+    name: 'local-only-skips-config-write',
+    why:
+      'Hiding the save button is not enough: hiding a device and reordering or ' +
+      'editing a custom dashboard push to the server on their own. Without this a ' +
+      '"local" browser would still mutate the layout everyone else sees. Resolves ' +
+      'rather than throws so those background saves stay silent.',
+    count: 1,
+    find: 'async function pushConfigToWorker(payload) {',
+    replace: `async function pushConfigToWorker(payload) {
+  if (HND_LOCAL_ONLY) return { ok: true, localOnly: true };`,
+  },
+
+  {
     name: 'hub-path',
     why:
       'The Worker proxied arbitrary sub-paths (/api/hub/devices/123/on/50). Hubitat ' +
@@ -169,6 +210,17 @@ export const RELABELS = [
   ["'✓ in KV'", "'✓ on hub'"],
   ['Saving to KV…', 'Saving to hub…'],
   ['✓ Saved to Cloudflare KV.', '✓ Saved to hub.'],
+  // Runtime messages, including the Reset Everything confirm() — a user hitting
+  // a prompt about wiping "KV" on a hub with no Cloudflare anywhere reasonably
+  // wonders what it is about to touch.
+  [
+    'Wipe ALL dashboard config from browser and KV (if configured)? Cannot be undone.',
+    'Wipe ALL dashboard config from this browser and from the hub? Cannot be undone.',
+  ],
+  [" (KV not configured — browser only)", ' (hub storage unavailable — browser only)'],
+  ['Could not fetch from KV: ', 'Could not fetch from the hub: '],
+  ['Could not load config from Worker, using cache:', 'Could not load config from the hub, using cache:'],
+  ['// fresh from KV — no unsaved changes', '// fresh from the hub — no unsaved changes'],
 ];
 
 /** Apply the cosmetic relabels, returning counts. Never throws. */

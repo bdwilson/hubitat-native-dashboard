@@ -240,6 +240,33 @@ function buildLoader(chunkNames, version) {
     }
   }
 
+  // In ?local=1 the hub config is neither read nor written, so "Save Config to
+  // Hub" would do nothing while reporting success. Replace it with a statement
+  // of what is actually happening rather than leaving a button that lies.
+  function markLocalOnlyMode() {
+    if (new URLSearchParams(location.search).get('local') !== '1') return;
+    try {
+      var save = document.getElementById('save-cfg');
+      if (save) save.style.display = 'none';
+      var modal = document.getElementById('settings-modal');
+      var card = modal ? modal.querySelector('.modal-card') : null;
+      if (card && !document.getElementById('hnd-local-note')) {
+        var note = document.createElement('div');
+        note.id = 'hnd-local-note';
+        note.className = 'help';
+        note.style.cssText = 'border-left:3px solid #ef6c00;padding-left:8px;margin:8px 0';
+        note.innerHTML =
+          '<b>Local-only mode.</b> This browser keeps its own layout and does not ' +
+          'read or write the dashboard config stored on the hub. Devices and ' +
+          'commands still go to the same hub. Drop <code>&amp;local=1</code> from the ' +
+          'URL to go back to the shared layout.';
+        card.insertBefore(note, card.firstChild ? card.firstChild.nextSibling : null);
+      }
+    } catch (e) {
+      console.warn('local-only marker skipped', e);
+    }
+  }
+
   Promise.all(PARTS.map(function (name) {
     return fetch(assetUrl(name)).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status + ' loading ' + name);
@@ -253,6 +280,7 @@ function buildLoader(chunkNames, version) {
     // program, so behaviour matches the Cloudflare build.
     (0, eval)(texts.join('\\n'));
     hideHubConnectionFields();
+    markLocalOnlyMode();
   }).catch(function (e) {
     fail('Could not load the dashboard code from the hub.', e && e.message);
   });

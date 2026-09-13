@@ -1,3 +1,15 @@
+  // Update dynamic/custom views if visible
+  if (currentView.startsWith('dynamic/')) {
+    renderDynamicDashboard(currentView.replace('dynamic/', ''));
+  } else if (currentView.startsWith('custom/')) {
+    renderCustomDashboard(currentView.replace('custom/', ''));
+  }
+}
+
+function handleHubEvent(evt) {
+  // Hubitat eventsocket event shape:
+  // { source, name, value, displayName, deviceId, unit, type }
+  // source is 'DEVICE' on Cloud Maker API events; local /eventsocket may omit it.
   // Only skip if source is explicitly something other than DEVICE (e.g. 'APP', 'LOCATION').
   if (!evt || (evt.source && evt.source !== 'DEVICE')) return;
   if (!evt.deviceId) return;
@@ -149,12 +161,12 @@ document.getElementById('save-cfg').addEventListener('click', async () => {
 });
 
 document.getElementById('reset-cfg').addEventListener('click', async () => {
-  if (!confirm('Wipe ALL dashboard config from browser and KV (if configured)? Cannot be undone.')) return;
+  if (!confirm('Wipe ALL dashboard config from this browser and from the hub? Cannot be undone.')) return;
   let kvMsg = '';
   try {
     const r = await fetch(API_CONFIG, { method: 'DELETE', credentials: 'same-origin', headers: workerHeaders() });
     if (r.status === 503) {
-      kvMsg = ' (KV not configured — browser only)';
+      kvMsg = ' (hub storage unavailable — browser only)';
     } else if (!r.ok) {
       throw new Error(`HTTP ${r.status}`);
     }
@@ -497,7 +509,7 @@ document.getElementById('show-json').addEventListener('click', async () => {
   try {
     const server = await fetchConfigFromWorker(false);
     document.getElementById('cfg-json').value = JSON.stringify(server, null, 2);
-  } catch (e) { setIoStatus(`Could not fetch from KV: ${e.message}`, 'err'); }
+  } catch (e) { setIoStatus(`Could not fetch from the hub: ${e.message}`, 'err'); }
 });
 
 function applyImportedConfig(parsed, source) {
@@ -607,9 +619,9 @@ async function boot() {
     renderView();  // re-apply after config (custom dashboards now loaded)
     updateNavChips();
     refreshCustomDashList();
-    markClean(); // fresh from KV — no unsaved changes
+    markClean(); // fresh from the hub — no unsaved changes
   } catch (e) {
-    console.warn('Could not load config from Worker, using cache:', e.message);
+    console.warn('Could not load config from the hub, using cache:', e.message);
   }
 
   if (!cfg.hubBaseUrl || !cfg.hubAppId || (!cfg.hubToken && !cfg.hubHasToken)) {

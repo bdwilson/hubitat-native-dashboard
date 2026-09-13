@@ -1,3 +1,12 @@
+// Called on a forced refresh (pull-to-refresh) — re-derives the freshest
+// known URL for the open lightbox's device and cache-busts it, since the
+// lightbox has no polling/render cycle of its own.
+function refreshLightboxImage() {
+  const modal = document.getElementById('lightbox-modal');
+  if (!modal || !modal.classList.contains('open') || !lightboxDeviceId) return;
+  const d = findDevice(lightboxDeviceId);
+  const url = d ? getImageUrl(d) : '';
+  if (!url) return;
   document.getElementById('lightbox-img').src = bustImageUrl(url);
 }
 
@@ -2216,16 +2225,3 @@ function applyDeviceAttrUpdate(deviceId, name, value) {
 
   // Update status bar if a presence attribute changed
   if (name === 'presence') updateStatusBar();
-
-  // Update dynamic/custom views if visible
-  if (currentView.startsWith('dynamic/')) {
-    renderDynamicDashboard(currentView.replace('dynamic/', ''));
-  } else if (currentView.startsWith('custom/')) {
-    renderCustomDashboard(currentView.replace('custom/', ''));
-  }
-}
-
-function handleHubEvent(evt) {
-  // Hubitat eventsocket event shape:
-  // { source, name, value, displayName, deviceId, unit, type }
-  // source is 'DEVICE' on Cloud Maker API events; local /eventsocket may omit it.

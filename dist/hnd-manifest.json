@@ -1,8 +1,8 @@
 {
-  "version": "98a50e2a20",
+  "version": "21aade05bc",
   "upstreamSha256": "bcaa156b72e8",
   "upstreamSource": "/home/user/bdwilson/cf-hubitat-dashboard/src/assets/index.html",
-  "builtAt": "2026-09-13T13:25:50.514Z",
+  "builtAt": "2026-09-13T13:28:52.297Z",
   "shell": "hnd-shell.html",
   "chunks": [
     "hnd-app-1.js",
@@ -15,16 +15,19 @@
     "api-config-const",
     "api-hub-const",
     "config-include-secrets-separator",
+    "local-only-mode-flag",
+    "local-only-skips-config-read",
+    "local-only-skips-config-write",
     "hub-path",
     "import-syncs-all-settings-inputs",
     "websocket-url",
     "websocket-cloud-guard"
   ],
-  "relabels": 13,
+  "relabels": 18,
   "bytes": {
-    "hnd-shell.html": 57811,
-    "hnd-app-1.js": 98278,
-    "hnd-app-2.js": 98277,
-    "hnd-app-3.js": 31593
+    "hnd-shell.html": 59200,
+    "hnd-app-1.js": 98295,
+    "hnd-app-2.js": 98264,
+    "hnd-app-3.js": 32098
   }
 }

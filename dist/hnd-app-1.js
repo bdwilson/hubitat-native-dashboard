@@ -6,6 +6,11 @@
 const API_CONFIG = 'config?access_token=' + encodeURIComponent(new URLSearchParams(location.search).get('access_token') || '');
 const API_HUB    = 'hub';
 const STORAGE_KEY = 'hubitat-dash-v4-cache';
+// hubitat-native-dashboard: with ?local=1 this browser keeps its layout to
+// itself — the hub's stored config is neither read nor written. Everything
+// still runs against the same hub and the same devices; only where the tile
+// layout lives changes.
+const HND_LOCAL_ONLY = new URLSearchParams(location.search).get('local') === '1';
 
 // Default layout: section → ordered slot IDs.
 // Slot IDs are stable — KV config keys off them.
@@ -256,6 +261,7 @@ function hubProxyHeaders() {
 }
 
 async function fetchConfigFromWorker(includeSecrets) {
+  if (HND_LOCAL_ONLY) throw new Error('local-only mode (?local=1) — hub config not loaded');
   const url = includeSecrets ? `${API_CONFIG}&include_secrets=1` : API_CONFIG;
   const r = await fetch(url, { credentials: 'same-origin', headers: workerHeaders() });
   if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
@@ -263,6 +269,7 @@ async function fetchConfigFromWorker(includeSecrets) {
 }
 
 async function pushConfigToWorker(payload) {
+  if (HND_LOCAL_ONLY) return { ok: true, localOnly: true };
   const r = await fetch(API_CONFIG, {
     method: 'PUT',
     headers: workerHeaders({ 'content-type': 'application/json' }),
@@ -1392,13 +1399,3 @@ function openLightbox(url, label, deviceId) {
   if (lbl) lbl.textContent = label || '';
   modal.classList.add('open');
 }
-
-// Called on a forced refresh (pull-to-refresh) — re-derives the freshest
-// known URL for the open lightbox's device and cache-busts it, since the
-// lightbox has no polling/render cycle of its own.
-function refreshLightboxImage() {
-  const modal = document.getElementById('lightbox-modal');
-  if (!modal || !modal.classList.contains('open') || !lightboxDeviceId) return;
-  const d = findDevice(lightboxDeviceId);
-  const url = d ? getImageUrl(d) : '';
-  if (!url) return;
