@@ -174,10 +174,16 @@ document.getElementById('save-cfg').addEventListener('click', async () => {
 });
 
 document.getElementById('reset-cfg').addEventListener('click', async () => {
-  if (!confirm('Wipe ALL dashboard config from this browser and from the hub? Cannot be undone.')) return;
+  if (!confirm(HND_LOCAL_ONLY
+    ? 'Wipe ALL dashboard config from this browser? The layout stored on the hub is not touched. Cannot be undone.'
+    : 'Wipe ALL dashboard config from this browser and from the hub? Cannot be undone.')) return;
   let kvMsg = '';
   try {
-    const r = await fetch(API_CONFIG, { method: 'DELETE', credentials: 'same-origin', headers: workerHeaders() });
+    // In local mode the hub's config is not this browser's to delete. Skip the
+    // request and stand in a success so the browser-side reset below still runs.
+    const r = HND_LOCAL_ONLY
+      ? { ok: true, status: 200 }
+      : await fetch(API_CONFIG, { method: 'DELETE', credentials: 'same-origin', headers: workerHeaders() });
     if (r.status === 503) {
       kvMsg = ' (hub storage unavailable — browser only)';
     } else if (!r.ok) {

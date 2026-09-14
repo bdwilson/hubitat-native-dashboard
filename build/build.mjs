@@ -227,13 +227,18 @@ function buildLoader(chunkNames, version) {
         }
       }
       // The panel's opening blurb explains browser-vs-Worker credential storage,
-      // which does not apply here.
+      // which does not apply here. Replaced with the one thing that is still
+      // worth saying: why there are no credential fields on this screen.
+      //
+      // It deliberately does NOT say where the layout is stored — that depends
+      // on the local/hub toggle below it, which states it accurately for the
+      // current mode. A fixed claim here would be wrong half the time.
       var card = modal.querySelector('.modal-card');
       var firstHelp = card ? card.querySelector('.help') : null;
       if (firstHelp && /credential|token/i.test(firstHelp.textContent || '')) {
         firstHelp.textContent =
-          'Tiles, layout and visibility are stored on the hub by this app. ' +
-          'Maker API credentials are configured on the app\\'s own settings page in Hubitat.';
+          'Maker API credentials are set on this app\\'s own settings page in ' +
+          'Hubitat, not here.';
       }
     } catch (e) {
       console.warn('native UI tweak skipped', e);
@@ -349,6 +354,16 @@ function buildLoader(chunkNames, version) {
       if (save) save.style.display = local ? 'none' : '';
 
       var row = save && save.closest ? save.closest('.btn-row') : null;
+
+      // The note under those buttons explains "Save Config to Hub", which is
+      // hidden in local mode — leaving it would describe a button that is not
+      // there.
+      if (row && local) {
+        var after = row.nextElementSibling;
+        if (after && after.className && after.className.indexOf('help') !== -1) {
+          after.style.display = 'none';
+        }
+      }
       if (!row || document.getElementById('hnd-mode-box')) return;
 
       var box = document.createElement('div');
@@ -450,6 +465,19 @@ function buildLoader(chunkNames, version) {
 </script>`;
 }
 
+/**
+ * Rules that must survive the app re-showing things.
+ *
+ * #hub-id-row is Cloudflare multi-hub machinery: the hub UID namespaced KV keys
+ * so several hubs could share one Worker. Here one app owns one `state`, so the
+ * row shows a value that namespaces nothing. Hiding it from JS does not stick —
+ * three separate code paths (openSettings, the token-status handler, and
+ * applyImportedConfig) set its display back to visible whenever a hub URL is
+ * derivable, which on this build is always. A stylesheet rule with !important
+ * beats those inline styles for good.
+ */
+const NATIVE_STYLE = `<style>#hub-id-row { display: none !important; }</style>`;
+
 const BOOT_NOTICE = `<div id="hnd-boot" style="position:fixed;inset:0;z-index:99999;background:#0d1117;color:#e8e8ea;font:14px/1.5 -apple-system,system-ui,sans-serif;padding:24px;overflow:auto">
 <h2 style="margin:0 0 8px">Loading dashboard&hellip;</h2>
 <p style="color:#9a9ba3;margin:0">Fetching the app from this hub&rsquo;s File Manager.</p>
@@ -499,6 +527,7 @@ async function main() {
   const version = createHash('sha256')
     .update(patched)
     .update(BOOT_NOTICE)
+    .update(NATIVE_STYLE)
     .update(buildLoader(chunkNames, '__VERSION__'))
     .digest('hex')
     .slice(0, 10);
@@ -510,7 +539,7 @@ async function main() {
   // that half works. The loader's VERSION is the same value, but it lives in JS
   // the Groovy side has no business parsing.
   const stamp = `<!-- hnd-build: ${version} -->`;
-  const shell = `${head}\n${stamp}\n${BOOT_NOTICE}\n${buildLoader(chunkNames, version)}\n${tail}`;
+  const shell = `${head}\n${stamp}\n${NATIVE_STYLE}\n${BOOT_NOTICE}\n${buildLoader(chunkNames, version)}\n${tail}`;
 
   const outDir = path.resolve(REPO_ROOT, args.out);
 

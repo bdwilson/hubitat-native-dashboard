@@ -120,6 +120,32 @@ const HND_LOCAL_ONLY = (function () {
   },
 
   {
+    name: 'local-only-reset-spares-hub-config',
+    why:
+      'DATA LOSS without this. Reset Everything does its own ' +
+      "fetch(API_CONFIG, {method:'DELETE'}) rather than going through " +
+      'pushConfigToWorker, so the local-only write gate does not cover it: a ' +
+      'browser in local mode would wipe the SHARED config off the hub — exactly ' +
+      'the thing local mode promises never to touch. Also makes the confirm text ' +
+      'state which of the two it is about to erase.',
+    count: 1,
+    find: `  if (!confirm('Wipe ALL dashboard config from browser and KV (if configured)? Cannot be undone.')) return;
+  let kvMsg = '';
+  try {
+    const r = await fetch(API_CONFIG, { method: 'DELETE', credentials: 'same-origin', headers: workerHeaders() });`,
+    replace: `  if (!confirm(HND_LOCAL_ONLY
+    ? 'Wipe ALL dashboard config from this browser? The layout stored on the hub is not touched. Cannot be undone.'
+    : 'Wipe ALL dashboard config from this browser and from the hub? Cannot be undone.')) return;
+  let kvMsg = '';
+  try {
+    // In local mode the hub's config is not this browser's to delete. Skip the
+    // request and stand in a success so the browser-side reset below still runs.
+    const r = HND_LOCAL_ONLY
+      ? { ok: true, status: 200 }
+      : await fetch(API_CONFIG, { method: 'DELETE', credentials: 'same-origin', headers: workerHeaders() });`,
+  },
+
+  {
     name: 'hub-path',
     why:
       'The Worker proxied arbitrary sub-paths (/api/hub/devices/123/on/50). Hubitat ' +
@@ -220,13 +246,9 @@ export const RELABELS = [
   ["'✓ in KV'", "'✓ on hub'"],
   ['Saving to KV…', 'Saving to hub…'],
   ['✓ Saved to Cloudflare KV.', '✓ Saved to hub.'],
-  // Runtime messages, including the Reset Everything confirm() — a user hitting
-  // a prompt about wiping "KV" on a hub with no Cloudflare anywhere reasonably
-  // wonders what it is about to touch.
-  [
-    'Wipe ALL dashboard config from browser and KV (if configured)? Cannot be undone.',
-    'Wipe ALL dashboard config from this browser and from the hub? Cannot be undone.',
-  ],
+  // Runtime messages. The Reset Everything confirm() is NOT here — the
+  // local-only-reset-spares-hub-config patch rewrites it, because its wording
+  // has to change with the mode, which a static relabel cannot do.
   [" (KV not configured — browser only)", ' (hub storage unavailable — browser only)'],
   ['Could not fetch from KV: ', 'Could not fetch from the hub: '],
   ['Could not load config from Worker, using cache:', 'Could not load config from the hub, using cache:'],

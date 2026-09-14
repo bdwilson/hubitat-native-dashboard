@@ -73,7 +73,7 @@ In local mode the **Save Config to Hub** button is hidden, since it would do not
 The choice is remembered per browser. `&local=1` / `&local=0` on the URL still force a mode for one load regardless, so you can hand out a link without changing what someone's browser remembers.
 
 Two things worth knowing:
-- Hiding a device and editing a custom dashboard normally save to the hub **on their own**, without the save button. Local mode suppresses those too, so a private browser can't quietly rewrite what everyone else sees. Verified: a session in local mode issued zero writes and left the hub's config untouched.
+- Hiding a device and editing a custom dashboard normally save to the hub **on their own**, without the save button. So does **Reset Everything**, which issues its own delete rather than going through the normal save path — in local mode that would have wiped the *shared* config, the one thing local mode promises not to touch. All of those are suppressed, and the reset confirmation states which of the two it is about to erase. Verified in both modes: local mode issues zero writes and leaves the hub's config intact; hub mode still wipes as expected.
 - A private layout lives in that browser's `localStorage`, so clearing site data loses it. Use **Download Config** to keep a copy.
 
 ## Building in CI
