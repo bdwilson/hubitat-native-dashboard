@@ -1,3 +1,15 @@
+  if (confirmResolve) { confirmResolve(false); confirmResolve = null; }
+});
+
+// ── Lightbox ──────────────────────────────────────────────────────────────────
+
+// Tracks which device (if any) is behind the currently-open lightbox, so a
+// pull-to-refresh can re-fetch a fresh frame into it. The lightbox's <img>
+// is otherwise a one-time snapshot set at open time — unlike the grid tile
+// it was opened from, nothing else in the app ever touches it again.
+let lightboxDeviceId = null;
+
+function bustImageUrl(url) {
   return url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now();
 }
 
@@ -2065,7 +2077,7 @@ async function pollTick() {
   // fires for a socket that died without closing), but no faster than that
   // same backoff — otherwise a hub that refuses the eventsocket would get
   // hammered once per poll tick.
-  if (!ws && !cfg.hubIsCloud && Date.now() - lastWsAttemptAt >= WS_RECONNECT_MS) {
+  if (!ws && !HND_VIA_CLOUD && Date.now() - lastWsAttemptAt >= WS_RECONNECT_MS) {
     connectWebSocket();
   }
 
@@ -2128,7 +2140,7 @@ function startDeviceListSync() {
 function connectWebSocket() {
   if (ws) return; // already connected
   // Cloud Maker API has no WebSocket event stream — skip and use polling.
-  if (location.hostname.includes('cloud.hubitat.com')) { startPolling(); return; }
+  if (HND_VIA_CLOUD) { startPolling(); return; }
   lastWsAttemptAt = Date.now();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const hubId = extractHubId();
@@ -2210,20 +2222,6 @@ function updateWsDotTitle() {
     const m = Math.floor(s / 60);
     return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`;
   };
-  const mode = wsIsLive() ? 'WebSocket (live)' : (cfg.hubIsCloud ? 'Polling (cloud — no WebSocket)' : 'Polling');
+  const mode = wsIsLive() ? 'WebSocket (live)' : (HND_VIA_CLOUD ? 'Polling (cloud — no WebSocket)' : 'Polling');
   const every = currentPollMs ? `${Math.round(currentPollMs / 1000)}s` : 'off';
   el.title = `${mode}\nPolling every ${every}\nLast data: ${ago(lastDataAt)}` +
-             (wsIsLive() ? `\nLast socket event: ${ago(lastWsEventAt)}` : '');
-}
-
-// Patches a device attribute in the local `devices` array and re-renders
-// whatever's currently showing it — shared by real WebSocket events
-// (handleHubEvent) and by optimistic tap-time updates (onTileClick etc.),
-// so a tile flips immediately on tap instead of waiting on a network
-// round-trip + the follow-up refreshAll() to reflect the new state.
-function applyDeviceAttrUpdate(deviceId, name, value) {
-  deviceId = String(deviceId);
-  const device = devices.find(d => String(d.id) === deviceId);
-  if (!device) return;
-
-  if (Array.isArray(device.attributes)) {

@@ -30,7 +30,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { applyPatches, applyRelabels } from './patches.mjs';
+import { applyPatches, applyRelabels, checkGuards } from './patches.mjs';
 import { createZip } from './zip.mjs';
 
 /**
@@ -498,6 +498,11 @@ async function main() {
   const raw = await loadSource(src);
   const upstreamHash = createHash('sha256').update(raw).digest('hex').slice(0, 12);
   console.log(`upstream: ${Buffer.byteLength(raw, 'utf8').toLocaleString()} bytes, sha256:${upstreamHash}`);
+
+  // Before patching: catch upstream ADDING a site this build diverges from.
+  // applyPatches only notices when code it already rewrites changes shape.
+  const guards = checkGuards(raw);
+  console.log(`guards:  ${guards.length} ok (${guards.map((g) => `${g.name}=${g.hits}`).join(', ')})`);
 
   const { out: transportPatched, applied } = applyPatches(raw);
   console.log(`patches: ${applied.length} applied (${applied.join(', ')})`);

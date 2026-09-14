@@ -21,6 +21,16 @@ const HND_LOCAL_ONLY = (function () {
   if (q === '0') return false;
   try { return localStorage.getItem(HND_MODE_KEY) === 'local'; } catch (e) { return false; }
 })();
+// hubitat-native-dashboard: upstream decides "can this setup use the
+// eventsocket?" from cfg.hubIsCloud — the hub URL typed into settings. On this
+// build that is the wrong question, and worse, it is not always answerable:
+// local-only mode never loads the hub's config, so cfg.hubIsCloud keeps its
+// upstream default of TRUE and every check against it reads backwards.
+//
+// What decides it here is how the BROWSER reached this page. Over the cloud
+// link there is no eventsocket to reach; over the local link there is,
+// whatever settings say. Declared once, used by every patched site.
+const HND_VIA_CLOUD = location.hostname.includes('cloud.hubitat.com');
 
 // Default layout: section → ordered slot IDs.
 // Slot IDs are stable — KV config keys off them.
@@ -1384,15 +1394,3 @@ document.getElementById('confirm-yes').addEventListener('click', () => {
 });
 document.getElementById('confirm-no').addEventListener('click', () => {
   confirmModal.classList.remove('open');
-  if (confirmResolve) { confirmResolve(false); confirmResolve = null; }
-});
-
-// ── Lightbox ──────────────────────────────────────────────────────────────────
-
-// Tracks which device (if any) is behind the currently-open lightbox, so a
-// pull-to-refresh can re-fetch a fresh frame into it. The lightbox's <img>
-// is otherwise a one-time snapshot set at open time — unlike the grid tile
-// it was opened from, nothing else in the app ever touches it again.
-let lightboxDeviceId = null;
-
-function bustImageUrl(url) {

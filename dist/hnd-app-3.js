@@ -1,3 +1,17 @@
+             (wsIsLive() ? `\nLast socket event: ${ago(lastWsEventAt)}` : '');
+}
+
+// Patches a device attribute in the local `devices` array and re-renders
+// whatever's currently showing it — shared by real WebSocket events
+// (handleHubEvent) and by optimistic tap-time updates (onTileClick etc.),
+// so a tile flips immediately on tap instead of waiting on a network
+// round-trip + the follow-up refreshAll() to reflect the new state.
+function applyDeviceAttrUpdate(deviceId, name, value) {
+  deviceId = String(deviceId);
+  const device = devices.find(d => String(d.id) === deviceId);
+  if (!device) return;
+
+  if (Array.isArray(device.attributes)) {
     const attr = device.attributes.find(a => a.name === name);
     if (attr) attr.currentValue = value;
     else device.attributes.push({ name, currentValue: value });
