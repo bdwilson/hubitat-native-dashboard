@@ -30,21 +30,26 @@ You need a Maker API instance first. If you already run one (Alexa, HomeBridge, 
 1. **Maker API** — Apps → Add Built-in App → Maker API. Select the devices you want on the dashboard. Note its **App ID** and **Access Token**.
 
 2. **Install the app code**, either way:
-   - **Bundle** — Settings → **Bundles** → *Import ZIP* → upload [`dist/hubitat-native-dashboard.zip`](dist/). Installs the app code in one step.
-   - **Paste** — Apps Code → New App → paste `app/HubitatNativeDashboard.groovy` → **Save**. (Or use **Import** with this repo's raw URL; the app's `importUrl` is already set for updates.)
+   - **Hubitat Package Manager** — *Install* → *Search by Keywords* → "Hubitat Native Dashboard". HPM installs the app **and enables OAuth for you**, and notifies you when an update is published. Recommended.
+   - **Paste / Import** — Apps Code → New App → paste `app/HubitatNativeDashboard.groovy` → **Save**. (Or use **Import** with this repo's raw URL; the app's `importUrl` is already set for updates.) Then enable OAuth by hand: **OAuth** → **Enable OAuth in App** → **Update**. Required either way — the dashboard links won't work without it.
 
-3. **Enable OAuth** — in Apps Code, click **OAuth** → **Enable OAuth in App** → **Update**. Required; the dashboard links won't work without it. (Bundles *can* ship OAuth pre-enabled, but that would bake one shared OAuth client secret into every install from this repo, so this one doesn't.)
+3. Apps → **Add User App** → *Hubitat Native Dashboard*. Paste the Maker API **App ID** and **Access Token** → **Done**.
 
-4. Apps → **Add User App** → *Hubitat Native Dashboard*. Paste the Maker API **App ID** and **Access Token** → **Done**.
-
-5. **Install the UI.** Reopen the app and click **"Install / update dashboard UI"**. It downloads the built files and writes them into File Manager itself.
+4. **Install the UI.** Reopen the app and click **"Install / update dashboard UI"**. It downloads the built files and writes them into File Manager itself.
    - Needs hub firmware **2.3.4.134+** (for `uploadHubFile()`). Older hubs: upload the `hnd-*` files from `dist/` to **Settings → File Manager** by hand — the app page tells you if this applies.
    - This is the only moment anything is fetched from outside the hub. Afterwards, serving, device access and config are all local.
    - Point **UI source URL** at your own host if you'd rather not fetch from GitHub.
 
-6. Reopen the app for the **Local** and **Cloud** dashboard links.
+5. Reopen the app for the **Local** and **Cloud** dashboard links.
 
-**Updating:** re-run `node build/build.mjs` (only needed if you changed the frontend), then use **Import** in Apps Code for the Groovy and the **Install / update dashboard UI** button for the UI.
+### Updating
+
+The app code and the dashboard UI update independently, and that is deliberate:
+
+- **App code** (the Groovy) — via HPM's *Update* if you installed that way, or **Import** in Apps Code. Only needed when the app itself changes, which is rare.
+- **Dashboard UI** (the `hnd-*` files) — the app's **"Install / update dashboard UI"** button. This is what changes whenever `cf-hubitat-dashboard`'s frontend does, which is most of the time.
+
+Because the UI is fetched by the app at runtime rather than shipped inside the package, a frontend change never requires an app update — and HPM won't nag you about one.
 
 `dist/` is committed on purpose — the self-install button fetches those files from this repo. Regenerate it whenever `cf-hubitat-dashboard`'s frontend changes:
 
@@ -168,8 +173,9 @@ That compiles to `CLASS_GENERATION`, which is the phase that catches the errors 
 | Dashboard boots, renders tiles, drives devices, saves config | ✅ in Chromium against `dev-server.mjs` |
 | Config backup → restore → save round-trip | ✅ in Chromium (caught a real bug — see below) |
 | "Save Config to Hub" button persists server-side | ✅ in Chromium (PUT issued, config read back) |
-| Bundle ZIP is a valid archive, matches the real bundle layout | ✅ unpacked with `unzip`, app file byte-identical |
+| `packageManifest.json` is valid JSON, matches HPM's schema | ✅ parsed and field-checked against this author's published manifests |
 | Groovy compiles | ✅ Groovy 2.4.21, `CLASS_GENERATION` |
+| **HPM install on a real hub** | ⚠️ **not yet** — not listed in `repository.json`, so not installable by search |
 | **The rewritten Groovy app on a real hub** | ⚠️ **partly** — Maker API proxy, listing, commands and both links confirmed; asset serving, config API and self-install not yet |
 
 ### An upstream bug this shook out

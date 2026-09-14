@@ -8,7 +8,6 @@
     "hnd-app-2.js",
     "hnd-app-3.js"
   ],
-  "bundle": "hubitat-native-dashboard.zip",
   "patches": [
     "head-pwa-links",
     "api-config-const",

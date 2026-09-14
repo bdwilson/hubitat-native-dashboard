@@ -141,9 +141,9 @@ The upstream app is one big IIFE. Splitting it across `<script>` tags would tear
 
 Two mechanisms, and it matters which does what:
 
-- **Bundles** (`dist/hubitat-native-dashboard.zip`, built by `build/build.mjs`). A bundle is a **flat ZIP** of `<namespace>.<Name>.groovy` files plus `install.txt`/`update.txt`, each of which is: line 1 namespace, line 2 bundle name, then `app|driver|library <file> [oauthClientId] [oauthClientSecret]`. **Verified by unpacking real published bundles** (thebearmay's webCoRE/AirThings/secureLogin), not from documentation — docs2.hubitat.com is blocked from this environment.
-  - **A bundle CANNOT carry File Manager files.** Entry types are only app/driver/library; no published bundle examined contained anything but Groovy and the two manifests. So bundles solve app-code install and nothing about the UI chunks.
-  - The OAuth client id/secret fields are **deliberately left empty**. They would otherwise be one shared secret across every install from this public repo, to save a single click.
+- **Hubitat Package Manager** (`packageManifest.json`). Ships the app's Groovy only, and sets `"oauth": true` so HPM enables OAuth during install — the hub mints its own credentials, so there is no shared secret. Follows the conventions in **bdwilson/hubitat**'s CLAUDE.md: stable UUID `id` per app entry (never changed on later releases), `version`/`dateReleased`/`releaseNotes` bumped on release, and `location` pointing at whichever branch the file actually lives on.
+  - **This repo previously shipped a bundle ZIP instead** (`dist/hubitat-native-dashboard.zip` + `build/zip.mjs`). It was removed as strictly dominated. A bundle is a flat ZIP of `<namespace>.<Name>.groovy` plus `install.txt`/`update.txt`, and **cannot carry File Manager files** — entry types are only app/driver/library (verified by unpacking thebearmay's published bundles; docs2.hubitat.com is blocked from this environment). So it installed exactly one Groovy file and did nothing for the UI chunks. Its `oauthClientId`/`oauthClientSecret` fields were left empty on purpose, because filling them would bake one shared secret into every install from this public repo — which cost users a manual "Enable OAuth" click. HPM does the same one-file install, enables OAuth without any shared secret, and adds update notifications a ZIP cannot. Don't reintroduce the bundle.
+  - **The UI is NOT in the package.** Only the app is. That is what makes a frontend change require no app update and generate no HPM update prompt — the app fetches the UI itself (below).
 - **Self-install** (`installUiFiles()` in the app). Hubitat exposes built-in `uploadHubFile(name, bytes)` / `downloadHubFile(name)` since **2.3.4.134**, so the app writes its own File Manager files. This is why `dist/` is **committed**: the button fetches those files from this repo's raw GitHub URLs.
   - This is the only outbound call the project ever makes, and only on a button press. Runtime stays entirely local. `uiSourceUrl` lets a user point it elsewhere.
   - `downloadHubFile()` is also now the preferred *read* path, falling back to the HTTP self-call on older firmware.
@@ -221,13 +221,12 @@ NOTICE                 — attribution for patterns adapted from evdev/hubitat-m
 app/
   HubitatNativeDashboard.groovy   — the App: OAuth, mappings, asset serving, Maker API proxy, config API
 build/
-  build.mjs            — reads upstream frontend, patches, chunks, enforces size ceilings, builds the bundle
-  patches.mjs          — asserted transport PATCHES + best-effort cosmetic RELABELS
-  zip.mjs              — dependency-free store-only ZIP writer, for the bundle
+  build.mjs            — reads upstream frontend, patches, chunks, enforces size ceilings
+  patches.mjs          — asserted transport PATCHES, count-pinned GUARDS, best-effort RELABELS
   dev-server.mjs       — local stand-in for the app; simulation, not the real thing
   check-groovy.groovy  — compile the app without a hub
-dist/                  — COMMITTED build output: the UI chunks the app self-installs from,
-                         plus the Hubitat bundle ZIP
+packageManifest.json   — HPM package: the app's Groovy only, with oauth enablement
+dist/                  — COMMITTED build output: the UI chunks the app self-installs from
 ```
 
 ## Status

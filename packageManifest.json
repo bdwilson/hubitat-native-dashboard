@@ -1,0 +1,21 @@
+{
+  "packageName": "Hubitat Native Dashboard",
+  "author": "Brian Wilson",
+  "version": "1.0.0",
+  "minimumHEVersion": "0.0",
+  "documentationLink": "https://github.com/bdwilson/hubitat-native-dashboard",
+  "communityLink": "",
+  "dateReleased": "2026-09-14",
+  "releaseNotes": "First release. Serves the cf-hubitat-dashboard frontend from the hub itself, wrapping an existing Maker API instance. The dashboard UI is installed by the app's own \"Install / update dashboard UI\" button, not by this package.",
+  "apps": [
+    {
+      "id": "20ba4d1c-f8f6-4eb1-b546-1ce5e9eb8b39",
+      "name": "Hubitat Native Dashboard",
+      "namespace": "bdwilson",
+      "location": "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/claude/guard-upstream-drift/app/HubitatNativeDashboard.groovy",
+      "required": true,
+      "oauth": true,
+      "version": "1.0.0"
+    }
+  ]
+}

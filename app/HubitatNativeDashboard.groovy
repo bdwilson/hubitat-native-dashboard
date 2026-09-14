@@ -44,7 +44,7 @@ definition(
     category: "My Apps",
     iconUrl: "",
     iconX2Url: "",
-    importUrl: "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/claude/modifier-syntax-error-188-lkzmfi/app/HubitatNativeDashboard.groovy",
+    importUrl: "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/claude/guard-upstream-drift/app/HubitatNativeDashboard.groovy",
     oauth: [displayName: "Hubitat Native Dashboard", displayLink: ""]
 )
 
