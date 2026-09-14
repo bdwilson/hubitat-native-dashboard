@@ -1,0 +1,33 @@
+{
+  "version": "cfce3bdace",
+  "upstreamSha256": "bcaa156b72e8",
+  "builtAt": "2026-09-14T02:20:55.032Z",
+  "shell": "hnd-shell.html",
+  "chunks": [
+    "hnd-app-1.js",
+    "hnd-app-2.js",
+    "hnd-app-3.js"
+  ],
+  "bundle": "hubitat-native-dashboard.zip",
+  "patches": [
+    "head-pwa-links",
+    "api-config-const",
+    "api-hub-const",
+    "config-include-secrets-separator",
+    "local-only-mode-flag",
+    "local-only-skips-config-read",
+    "local-only-skips-config-write",
+    "local-only-reset-spares-hub-config",
+    "hub-path",
+    "import-syncs-all-settings-inputs",
+    "websocket-url",
+    "websocket-cloud-guard"
+  ],
+  "relabels": 17,
+  "bytes": {
+    "hnd-shell.html": 66790,
+    "hnd-app-1.js": 98267,
+    "hnd-app-2.js": 98263,
+    "hnd-app-3.js": 32910
+  }
+}

@@ -1,0 +1,1482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hubitat">
+<meta name="theme-color" content="#0d1117">
+<!-- PWA manifest/icons removed by hubitat-native-dashboard build:
+     no static asset origin on the hub, and Hubitat Cloud corrupts binary responses. -->
+<title>Hubitat Dashboard</title>
+<style>
+  :root {
+    --bg: #000;
+    --tile-bg: #1a1a1a;
+    --tile-border: #2a2a2a;
+    --tile-text: #d4d4d4;
+    --tile-label: #9a9a9a;
+    --active: #2dbf64;
+    --active-text: #0a0a0a;
+    --alert: #d83a3a;
+    --info: #2d7fbf;
+    --warn: #e8a93a;
+    --disabled-bg: #e8e8e8;
+    --disabled-text: #1a1a1a;
+    /* Secondary surfaces (modals, dropdowns, wells) and muted text/border
+       shades, layered darker/dimmer than --tile-bg/--tile-label. Kept as
+       their own variables (rather than hardcoded hex scattered through the
+       file) so the light theme below can redefine them in one place. */
+    --surface-1: #1e1e1e;
+    --surface-2: #111;
+    --surface-3: #0a0a0a;
+    --border-soft: #333;
+    --border-mid: #444;
+    --text-dim: #555;
+    --text-dim-2: #666;
+    --text-faint: #888;
+    --mode-chip-color: #b0b0ff;
+    --btn-secondary-text: #fff;
+    --gap: 6px;
+    --radius: 4px;
+    --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --grid-cols: 3;
+    --row-h: 80px;
+    --icon-scale: 1;
+    --chip-accent: #2d7fbf;
+    --chip-accent-dynamic: #2d7fbf;
+  }
+  /* Light theme — applied via [data-theme="light"] on <html>, set by
+     applyTheme() (manual choice or auto day/night). Overrides only the
+     color variables above; layout/sizing vars are theme-independent. */
+  html[data-theme="light"] {
+    --bg: #eef0f3;
+    --tile-bg: #ffffff;
+    --tile-border: #d7d9de;
+    --tile-text: #1c1e21;
+    --tile-label: #63666d;
+    --active: #1f9d55;
+    --active-text: #ffffff;
+    --alert: #c0342f;
+    --info: #2166a3;
+    --warn: #a8730a;
+    --disabled-bg: #e2e3e7;
+    --disabled-text: #8a8d94;
+    --surface-1: #e4e6ea;
+    --surface-2: #f6f7f9;
+    --surface-3: #eceef1;
+    --border-soft: #d7d9de;
+    --border-mid: #c6c9cf;
+    --text-dim: #80838a;
+    --text-dim-2: #71747b;
+    --text-faint: #9a9da4;
+    --mode-chip-color: #5a5ac2;
+    --btn-secondary-text: #1c1e21;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--tile-text);
+    font-family: var(--font-stack);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+  body { padding: var(--gap); min-height: 100vh; }
+
+  /* ── Status bar ── */
+  /* HSM/mode/presence chips on the left, secondary icon buttons (theme
+     toggle, hub link) pinned to the top-right of the same row. The icon
+     cluster is absolutely positioned rather than a wrapping flex sibling:
+     when the chips wrap to 2+ lines on narrow viewports, a flex sibling
+     gets pushed below the *whole* wrapped block instead of sitting beside
+     it — absolute positioning plus reserved padding on #status-bar avoids
+     that and keeps the icons pinned in the corner no matter how many
+     chip rows there are. */
+  .status-row { position: relative; padding: 4px 2px 8px; }
+  #status-bar {
+    display: flex; align-items: center; flex-wrap: wrap;
+    gap: 6px; min-height: 32px; padding-right: 64px;
+  }
+  .status-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 12px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+    background: var(--surface-1); color: var(--tile-label);
+    border: 1px solid var(--tile-border);
+  }
+  .status-chip .chip-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  }
+  .status-chip.hsm-disarmed { background: rgba(45,191,100,0.12); color: var(--active); border-color: rgba(45,191,100,0.25); }
+  .status-chip.hsm-armed    { background: rgba(216,58,58,0.15);  color: var(--alert);  border-color: rgba(216,58,58,0.3); }
+  .status-chip.hsm-armed .chip-dot   { background: var(--alert); }
+  .status-chip.hsm-disarmed .chip-dot { background: var(--active); }
+  .status-chip.presence-home { color: var(--active); border-color: rgba(45,191,100,0.2); }
+  .status-chip.presence-away { color: var(--text-dim-2); }
+  .status-chip.presence-home .chip-dot { background: var(--active); }
+  .status-chip.presence-away .chip-dot { background: var(--border-mid); }
+  .status-chip.mode-chip { color: var(--mode-chip-color); border-color: rgba(100,100,220,0.2); }
+  /* Clickable status chips */
+  .status-chip[data-action] { cursor: pointer; }
+  .status-chip[data-action]:hover { filter: brightness(1.2); }
+
+  /* ── Top bar ── */
+  /* Secondary icon buttons (hub link, theme toggle) ride along the right
+     side of .status-row instead of crowding the Edit/Settings row. Pinned
+     via absolute positioning — see the #status-bar comment above. */
+  .topbar-icons { position: absolute; top: 4px; right: 2px; display: flex; align-items: center; gap: 2px; }
+  .topbar-icons .icon-btn { font-size: 15px; padding: 2px 6px; }
+  .topbar { display: flex; align-items: center; gap: 8px; padding: 4px 2px 8px; flex-wrap: wrap; }
+  .topbar h1 { font-size: 20px; font-weight: 500; letter-spacing: 0.3px; }
+  .home-icon {
+    width: 20px; height: 20px;
+    border: 1.5px solid var(--tile-text);
+    border-bottom: none;
+    border-radius: 50% 50% 0 0 / 80% 80% 0 0;
+    position: relative; margin-left: 2px; flex-shrink: 0;
+  }
+  .home-icon::before {
+    content: ""; position: absolute;
+    bottom: -4px; left: -2px; right: -2px;
+    height: 4px; background: var(--bg);
+    border-top: 1.5px solid var(--tile-text);
+  }
+  .spacer { flex: 1; }
+  .icon-btn {
+    background: none; border: none; color: var(--tile-label);
+    font-size: 18px; cursor: pointer; padding: 4px 8px;
+  }
+  .icon-btn:hover { color: var(--tile-text); }
+  .conn-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--alert); display: inline-block; flex-shrink: 0;
+  }
+  .conn-dot.ok { background: var(--active); }
+  .ws-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: transparent; border: 1.5px solid var(--border-mid);
+    display: inline-block; flex-shrink: 0; title: "WebSocket";
+  }
+  .ws-dot.live { background: var(--info); border-color: var(--info); }
+  .edit-mode-toggle {
+    background: var(--tile-bg); border: 1px solid var(--border-soft);
+    color: var(--tile-label); padding: 4px 10px;
+    font-size: 11px; border-radius: 3px;
+    cursor: pointer; letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .edit-mode-toggle.on { background: var(--info); color: #fff; border-color: var(--info); }
+
+  /* ── Dashboard nav ── */
+  #dash-nav {
+    display: none; align-items: flex-start; gap: 6px;
+    padding: 0 2px 8px; flex-wrap: wrap;
+  }
+  #dash-nav.visible { display: flex; }
+  .nav-chip {
+    padding: 4px 12px; border-radius: 14px;
+    font-size: 12px; cursor: pointer;
+    background: var(--tile-bg); border: 1px solid var(--tile-border);
+    color: var(--tile-label); flex-shrink: 1;
+  }
+  /* Mobile: smaller chips to fit more without wrapping */
+  @media (max-width: 500px) {
+    .nav-chip {
+      padding: 2px 8px;
+      font-size: 11px;
+    }
+  }
+  /* Two independent user-customizable accent colors: --chip-accent covers
+     the default/Main chip and custom dashboards, --chip-accent-dynamic
+     covers auto-generated (dynamic) dashboards. The .dynamic.active rule
+     has higher specificity than .active alone, so it wins for auto-
+     generated chips while everything else still uses --chip-accent. */
+  .nav-chip.active { background: var(--chip-accent); color: #fff; border-color: var(--chip-accent); }
+  .nav-chip.custom { border-color: var(--chip-accent); color: var(--chip-accent); }
+  .nav-chip.dynamic { border-color: var(--chip-accent-dynamic); color: var(--chip-accent-dynamic); }
+  /* .custom and .dynamic above are the same specificity (2 classes) as
+     .active, so which one wins the `color` property for an active custom/
+     dynamic chip came down to source order rather than intent — and lost,
+     leaving text the same color as its own background (invisible in both
+     themes). These 3-class rules resolve it unambiguously instead of
+     relying on rule ordering. */
+  .nav-chip.dynamic.active { background: var(--chip-accent-dynamic); border-color: var(--chip-accent-dynamic); color: #fff; }
+  .nav-chip.custom.active { color: #fff; }
+
+  /* ── Layout containers ── */
+  /*
+   * Internally the section grid uses 2× the user-facing column count.
+   * This lets us support half-width tiles (colSpan=0.5 → span 1 CSS unit)
+   * without fractional grid columns.
+   *   1 user col  = span 2 CSS units (default)
+   *   ½ user col  = span 1 CSS unit
+   *   2 user cols = span 4 CSS units
+   *   3 user cols = span 6 CSS units
+   */
+  .section {
+    display: grid;
+    grid-template-columns: repeat(calc(var(--grid-cols, 3) * 2), 1fr);
+    grid-auto-rows: var(--row-h, 80px);
+    grid-auto-flow: dense;
+    gap: var(--gap); margin-bottom: var(--gap);
+  }
+  /* Default: every section child occupies 1 user-column = 2 CSS units */
+  .section > .tile,
+  .section > .image-tile,
+  .section > .tile-add { grid-column: span 2; }
+  .split {
+    display: grid; grid-template-columns: 2fr 1fr;
+    gap: var(--gap); margin-bottom: var(--gap);
+  }
+  .col { display: flex; flex-direction: column; gap: var(--gap); }
+
+  /* Dynamic / custom dashboard grid */
+  .dyn-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    grid-auto-rows: var(--row-h, 80px);
+    grid-auto-flow: dense;
+    gap: var(--gap); margin-bottom: var(--gap);
+  }
+
+  /* ── Tiles ── */
+  .tile {
+    background: var(--tile-bg);
+    border: 1px solid var(--tile-border);
+    border-radius: var(--radius);
+    padding: 8px 6px;
+    min-height: 0; /* section grid controls height via grid-auto-rows */
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 3px; cursor: pointer; text-align: center;
+    position: relative;
+    transition: background 80ms ease, transform 80ms ease;
+    overflow: hidden;
+  }
+  /* Flex-column tiles (right-col) still need an explicit minimum */
+  .col .tile { min-height: var(--row-h, 80px); }
+  .tile:active { transform: scale(0.98); }
+  .tile-label { font-size: clamp(9px, calc(var(--row-h, 80px) * 0.165), 16px); color: var(--tile-label); font-weight: 500; line-height: 1.15; }
+  .tile-value { font-size: clamp(10px, calc(var(--row-h, 80px) * 0.185), 18px); font-weight: 600; color: var(--tile-text); line-height: 1; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .tile-value svg { width: calc(1.2em * var(--icon-scale, 1)); height: calc(1.2em * var(--icon-scale, 1)); flex-shrink: 0; fill: currentColor; }
+  /* HTML-rendered text tiles (e.g. Device Watchdog reports) can be taller than
+     the tile — scroll internally and anchor to the top instead of letting the
+     tile's center-alignment clip both ends of an overflowing table/div. */
+  .tile-value.html-content {
+    display: block; flex: 1 1 auto; align-self: stretch;
+    /* Flex items default to min-height:auto, which sizes to content and
+       defeats overflow — must be overridden for overflow-y to take effect. */
+    min-height: 0;
+    overflow-y: auto; text-align: left; width: 100%;
+  }
+  .tile-battery {
+    position: absolute; top: 6px; left: 8px;
+    font-size: 10px; color: var(--tile-label); font-weight: 500;
+  }
+  .tile-edit {
+    position: absolute; top: 4px; right: 6px;
+    color: var(--tile-label); font-size: 14px;
+    line-height: 1; padding: 2px 4px;
+    cursor: pointer; display: none;
+  }
+  body.edit-mode .tile-edit { display: block; }
+  body.edit-mode .tile,
+  body.edit-mode .image-tile { outline: 1px dashed var(--border-mid); outline-offset: -2px; }
+
+  /* Edit mode drag handles */
+  .tile-drag-handle {
+    position: absolute; bottom: 4px; right: 6px;
+    color: var(--border-mid); font-size: 12px; cursor: grab;
+    display: none; line-height: 1;
+  }
+  body.edit-mode .tile-drag-handle { display: block; }
+  .tile.dragging { opacity: 0.4; }
+  .tile.drag-over { outline: 2px dashed var(--info) !important; outline-offset: -2px; }
+
+  /* Edit mode remove button */
+  .tile-remove {
+    position: absolute; top: 4px; left: 6px;
+    color: var(--alert); font-size: 14px; font-weight: bold;
+    line-height: 1; padding: 2px 4px;
+    cursor: pointer; display: none; background: none; border: none;
+  }
+  body.edit-mode .tile-remove { display: block; z-index: 3; }
+
+  /* Tile state classes */
+  .tile.active {
+    background: var(--active); color: var(--active-text);
+    border-color: var(--active);
+  }
+  .tile.active .tile-label, .tile.active .tile-value,
+  .tile.active .tile-battery, .tile.active .tile-edit,
+  .tile.active .tile-drag-handle { color: var(--active-text); }
+  .tile.info { background: var(--info); color: #fff; border-color: var(--info); }
+  .tile.info .tile-label, .tile.info .tile-value { color: #fff; }
+  .tile.alert { background: var(--alert); color: #fff; border-color: var(--alert); }
+  .tile.alert .tile-label, .tile.alert .tile-value { color: #fff; }
+  .tile.flat {
+    background: var(--disabled-bg); color: var(--disabled-text);
+    border-color: var(--disabled-bg);
+  }
+  .tile.flat .tile-label, .tile.flat .tile-value { color: var(--disabled-text); }
+  .tile.unmapped { background: var(--surface-3); border-style: dashed; border-color: var(--border-soft); color: var(--text-dim); }
+  .tile.unmapped .tile-label { color: var(--text-dim); }
+  /* Spacer tiles — invisible (opacity:0) in normal mode so they hold grid space,
+     dashed placeholder in edit mode so they're visible and draggable */
+  .tile.spacer {
+    background: transparent; border: none; opacity: 0;
+    cursor: default; pointer-events: none;
+  }
+  body.edit-mode .tile.spacer {
+    opacity: 1; background: transparent; border: 1px dashed var(--border-soft);
+    pointer-events: auto;
+  }
+  body.edit-mode .tile.spacer .tile-label { color: var(--border-mid); font-size: 10px; }
+  .tile.hidden, .image-tile.hidden { display: none; }
+  /* Hidden tiles visible as ghosted placeholders in edit mode */
+  body.edit-mode .tile.hidden {
+    display: flex !important; opacity: 0.22;
+    border-style: dashed; pointer-events: auto;
+  }
+
+  /* Battery color tiles (used on battery dynamic dashboard) */
+  .tile.batt-red { background: rgba(216,58,58,0.18); border-color: rgba(216,58,58,0.35); }
+  .tile.batt-red .tile-label, .tile.batt-red .tile-value { color: var(--alert); }
+  .tile.batt-amber { background: rgba(232,169,58,0.12); border-color: rgba(232,169,58,0.25); }
+  .tile.batt-amber .tile-label, .tile.batt-amber .tile-value { color: var(--warn); }
+  .tile.batt-green { background: rgba(45,191,100,0.08); border-color: rgba(45,191,100,0.18); }
+  .tile.batt-green .tile-label, .tile.batt-green .tile-value { color: var(--active); }
+
+  /* Corner resize handle */
+  .resize-handle {
+    position: absolute; bottom: 0; right: 0;
+    width: 14px; height: 14px; cursor: nwse-resize;
+    display: none; touch-action: none;
+    background: linear-gradient(135deg, transparent 50%, var(--text-dim) 51%);
+    border-bottom-right-radius: var(--radius);
+    z-index: 2;
+  }
+  body.edit-mode .tile .resize-handle { display: block; }
+  body.edit-mode .image-tile .resize-handle { display: block; z-index: 3; }
+  /* Drag handle needs z-index + contrast inside image tiles */
+  .image-tile .tile-drag-handle { z-index: 3; background: rgba(0,0,0,0.55); color: #ccc; border-radius: 2px; padding: 1px 3px; }
+
+  /* Dirty / unsaved badge */
+  #dirty-badge {
+    display: none;
+    background: rgba(232,169,58,0.18); color: var(--warn);
+    border: 1px solid rgba(232,169,58,0.35);
+    padding: 3px 9px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.2px;
+    cursor: default;
+  }
+
+  /* Column/row span — section tiles use CSS-unit values (2× user columns) */
+  .section > [data-col="1"]  { grid-column: span 1; }  /* ½ user col  */
+  .section > [data-col="4"]  { grid-column: span 4; }  /* 2 user cols */
+  .section > [data-col="6"]  { grid-column: span 6; }  /* 3 user cols */
+  /* Half-width tiles get smaller text so they don't overflow */
+  .section > [data-col="1"] .tile-label { font-size: clamp(7px, calc(var(--row-h, 80px) * 0.13), 12px); }
+  .section > [data-col="1"] .tile-value { font-size: clamp(8px, calc(var(--row-h, 80px) * 0.15), 13px); }
+  /* Custom/dynamic grids use 1:1 user-column spans */
+  #custom-grid > [data-col="2"] { grid-column: span 2; }
+  #custom-grid > [data-col="3"] { grid-column: span 3; }
+  /* Row span — same semantics everywhere */
+  .tile[data-row="2"],       .image-tile[data-row="2"]  { grid-row: span 2; }
+  .tile[data-row="3"],       .image-tile[data-row="3"]  { grid-row: span 3; }
+  .tile[data-row="4"],       .image-tile[data-row="4"]  { grid-row: span 4; }
+  /* Custom grid col span for image tiles */
+  #custom-grid > .image-tile[data-col="2"] { grid-column: span 2; }
+  #custom-grid > .image-tile[data-col="3"] { grid-column: span 3; }
+
+  /* Add-tile placeholder */
+  .tile-add {
+    background: transparent; border: 1px dashed var(--border-soft);
+    border-radius: var(--radius); min-height: 0;
+    display: none; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--border-mid); font-size: 22px;
+    transition: border-color 120ms, color 120ms;
+  }
+  .tile-add:hover { border-color: var(--text-dim); color: var(--text-faint); }
+  body.edit-mode .tile-add { display: flex; }
+
+  /* ── Image tiles ── */
+  .image-tile {
+    background: var(--surface-3);
+    border-radius: var(--radius);
+    border: 1px solid var(--tile-border);
+    aspect-ratio: 16 / 9;
+    overflow: hidden; position: relative; cursor: pointer;
+  }
+  .image-tile.portrait { aspect-ratio: 9 / 16; }
+  /* Custom-grid image tiles fill their assigned grid cells — let col/row span control sizing */
+  #custom-grid .image-tile { aspect-ratio: unset; min-height: var(--row-h, 80px); }
+  #custom-grid .image-tile.portrait { aspect-ratio: unset; }
+  .image-tile img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; -webkit-user-drag: none; }
+  /* Drag/resize feedback for image tiles (mirrors .tile rules) */
+  .image-tile.dragging { opacity: 0.4; }
+  .image-tile.drag-over { outline: 2px dashed var(--info) !important; outline-offset: -2px; }
+  .image-tile .image-label {
+    position: absolute; bottom: 4px; left: 6px;
+    background: rgba(0,0,0,0.55); color: #fff;
+    font-size: 11px; padding: 2px 6px; border-radius: 2px;
+  }
+  .image-tile .image-edit {
+    position: absolute; top: 4px; right: 6px;
+    background: rgba(0,0,0,0.6); color: #fff;
+    font-size: 14px; padding: 2px 6px;
+    border-radius: 3px; display: none;
+  }
+  body.edit-mode .image-tile .image-edit { display: block; }
+  .image-empty {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-dim); font-size: 12px;
+  }
+
+  /* ── Lightbox ── */
+  #lightbox-modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.94);
+    display: none; align-items: center; justify-content: center;
+    z-index: 200; cursor: zoom-out;
+  }
+  #lightbox-modal.open { display: flex; }
+  #lightbox-modal img {
+    max-width: 100%; max-height: 100%;
+    object-fit: contain; display: block;
+    border-radius: 4px;
+  }
+  #lightbox-close {
+    position: fixed; top: 12px; right: 16px;
+    background: rgba(0,0,0,0.7); color: #fff;
+    border: 1px solid var(--border-mid); border-radius: 50%;
+    width: 34px; height: 34px; font-size: 18px; line-height: 34px;
+    text-align: center; cursor: pointer; z-index: 201;
+  }
+  #lightbox-label {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.65); color: #fff;
+    font-size: 12px; padding: 4px 10px; border-radius: 3px;
+    pointer-events: none; z-index: 201;
+  }
+
+  /* ── Modals ── */
+  .modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.88);
+    display: none; align-items: flex-start; justify-content: center;
+    z-index: 100; overflow-y: auto; padding: 20px 10px;
+  }
+  .modal.open { display: flex; }
+  .modal-card {
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    border-radius: 8px; width: 100%; max-width: 720px;
+    padding: 20px; color: var(--tile-text);
+  }
+  .modal-card h2 { font-size: 18px; margin-bottom: 16px; font-weight: 500; }
+  .modal-card h3 {
+    font-size: 13px; color: var(--tile-label);
+    text-transform: uppercase; letter-spacing: 0.8px;
+    margin: 16px 0 6px; font-weight: 600;
+  }
+  .form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .form-row label { font-size: 12px; color: var(--tile-label); }
+  .form-row input, .form-row select, .form-row textarea {
+    background: var(--tile-bg); border: 1px solid var(--tile-border);
+    color: var(--tile-text); padding: 8px 10px;
+    font-size: 14px; font-family: var(--font-stack);
+    border-radius: 4px; outline: none; width: 100%;
+  }
+  .form-row input:focus, .form-row select:focus { border-color: var(--info); }
+  .btn-row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  .btn {
+    background: var(--info); color: #fff; border: none;
+    padding: 10px 16px; font-size: 14px; border-radius: 4px;
+    cursor: pointer; font-family: var(--font-stack);
+  }
+  .btn.secondary { background: var(--tile-border); color: var(--btn-secondary-text); }
+  .btn.danger { background: var(--alert); }
+  .btn.sm { padding: 6px 12px; font-size: 13px; }
+  .help {
+    font-size: 12px; color: var(--tile-label);
+    line-height: 1.5; margin: 8px 0; padding: 10px;
+    background: var(--surface-3); border-left: 3px solid var(--info);
+    border-radius: 2px;
+  }
+  .help code { background: var(--tile-bg); padding: 1px 5px; border-radius: 2px; font-size: 11px; font-family: ui-monospace, monospace; }
+  .status-msg { font-size: 12px; margin-top: 8px; padding: 6px 10px; border-radius: 4px; }
+  .status-msg.ok { background: rgba(45,191,100,0.15); color: var(--active); }
+  .status-msg.err { background: rgba(216,58,58,0.15); color: var(--alert); }
+  .status-msg.warn { background: rgba(220,160,0,0.15); color: #e6a800; }
+
+  /* ── Icon picker ── */
+  #icon-picker-modal .modal-card { max-width: 480px; }
+  #icon-picker-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+    gap: 6px; max-height: 360px; overflow-y: auto; padding: 4px; margin: 8px 0;
+  }
+  .icon-picker-item {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px; padding: 8px 4px; background: var(--tile-bg); border: 1px solid var(--tile-border);
+    border-radius: 6px; cursor: pointer; color: var(--tile-text);
+  }
+  .icon-picker-item:hover { border-color: var(--info); background: var(--surface-1); }
+  .icon-picker-item.selected { border-color: var(--info); background: rgba(59,130,246,0.15); }
+  .icon-picker-item svg { width: 22px; height: 22px; fill: currentColor; }
+  .icon-picker-item span {
+    font-size: 9px; color: var(--tile-label); text-align: center;
+    word-break: break-word; line-height: 1.2;
+  }
+  .te-icon-btn { display: flex; align-items: center; gap: 8px; }
+  .te-icon-preview { width: 20px; height: 20px; display: inline-flex; flex-shrink: 0; fill: currentColor; }
+  .te-icon-preview svg { width: 100%; height: 100%; }
+  .te-icon-state-label { font-size: 11px; color: var(--tile-label); margin-bottom: 4px; }
+
+  /* Confirm modal — compact centered */
+  #confirm-modal .modal-card { max-width: 360px; text-align: center; }
+
+  /* Thermostat control */
+  #thermostat-modal .modal-card { max-width: 380px; text-align: center; }
+  .thermo-temp {
+    font-size: 52px; font-weight: 600; line-height: 1; margin-bottom: 4px;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }
+  .thermo-temp svg { width: 36px; height: 36px; fill: currentColor; flex-shrink: 0; }
+  .thermo-sub { color: var(--tile-label); font-size: 13px; margin-bottom: 4px; text-transform: capitalize; }
+  .thermo-setpoint-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 4px; border-top: 1px solid #2a2a2a; text-align: left;
+  }
+  .thermo-setpoint-label { font-size: 13px; color: var(--tile-label); }
+  .thermo-setpoint-value { font-size: 22px; font-weight: 600; min-width: 56px; text-align: center; }
+  .thermo-step {
+    width: 40px; height: 40px; border-radius: 50%; border: none; flex-shrink: 0;
+    background: #2a2a2a; color: var(--tile-text); font-size: 20px; line-height: 1;
+    cursor: pointer;
+  }
+  .thermo-step:active { background: var(--info); }
+  .thermo-modes, .thermo-fan {
+    display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 14px;
+  }
+  .thermo-mode-btn { flex: 0 1 auto; min-width: 64px; }
+
+  /* Dashboard manager items */
+  .dashboard-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; background: var(--tile-bg);
+    border: 1px solid var(--tile-border); border-radius: 4px;
+    cursor: grab; user-select: none;
+  }
+  .dashboard-item.dragging { opacity: 0.5; }
+  .dashboard-item.drag-over { border-color: var(--info); background: rgba(45,127,191,0.15); }
+  .dashboard-item .drag-handle { cursor: grab; color: var(--text-dim-2); user-select: none; }
+  .dashboard-item input[type="checkbox"] { cursor: pointer; flex-shrink: 0; }
+  .dashboard-item label { flex: 1; cursor: pointer; user-select: none; }
+  .dashboard-item.hidden-dashboard label { color: var(--text-dim-2); font-style: italic; }
+  #confirm-modal p { margin: 12px 0 4px; color: var(--tile-label); font-size: 14px; line-height: 1.5; }
+  #confirm-modal .btn-row { justify-content: center; }
+
+  /* Device picker scrollable list */
+  #device-list { max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .device-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; background: var(--tile-bg);
+    border: 1px solid var(--tile-border); border-radius: 4px; cursor: pointer;
+  }
+  .device-row:hover { border-color: var(--info); }
+  .device-row .dev-name { font-size: 13px; flex: 1; }
+  .device-row .dev-id { font-size: 11px; color: var(--tile-label); }
+
+  /* Dynamic dashboard hidden tile — invisible in normal mode, ghost in edit mode */
+  .tile.dyn-hidden { display: none; }
+  body.edit-mode .tile.dyn-hidden {
+    display: flex !important; opacity: 0.22;
+    border-style: dashed; pointer-events: auto;
+  }
+  .tile-hide-toggle {
+    position: absolute; bottom: 4px; left: 6px;
+    font-size: 10px; color: var(--tile-label);
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    border-radius: 2px; padding: 1px 5px; cursor: pointer;
+    display: none;
+  }
+  body.edit-mode .tile-hide-toggle { display: block; }
+
+  /* ── Responsive ── */
+  @media (min-width: 600px) and (max-width: 899px) {
+    body { padding: 8px; }
+    :root { --gap: 7px; }
+  }
+  @media (min-width: 900px) and (max-width: 1199px) {
+    body { padding: 10px; }
+    :root { --gap: 8px; }
+    .topbar h1 { font-size: 24px; }
+  }
+  @media (min-width: 1200px) and (max-width: 1599px) {
+    body { padding: 12px; max-width: 1400px; margin: 0 auto; }
+    :root { --gap: 10px; }
+    .topbar h1 { font-size: 26px; }
+    .split { grid-template-columns: 3fr 1fr; }
+    .col#cameras {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: var(--gap); align-content: start;
+    }
+    .col#cameras .image-tile.portrait { grid-row: span 2; }
+  }
+  @media (min-width: 1600px) {
+    body { padding: 16px; max-width: 1800px; margin: 0 auto; }
+    :root { --gap: 12px; }
+    .topbar h1 { font-size: 28px; }
+    .split { grid-template-columns: 3fr 1fr; }
+    .col#cameras {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: var(--gap); align-content: start;
+    }
+    .col#cameras .image-tile.portrait { grid-row: span 2; }
+  }
+  @media (max-width: 599px) {
+    /* Keep cameras + right-col side by side so images are thumbnail-sized.
+       Tap an image tile to enlarge it in the lightbox. */
+    .split { grid-template-columns: 3fr 2fr; }
+  }
+
+  /* ── Pull-to-refresh (standalone/PWA only — see initPullToRefresh) ── */
+  #pull-refresh {
+    position: fixed; top: 0; left: 50%;
+    transform: translate(-50%, -60px);
+    width: 34px; height: 34px; border-radius: 50%;
+    background: var(--tile-bg); border: 1px solid var(--tile-border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: var(--tile-label);
+    z-index: 250; pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  }
+  #pull-refresh.ready { color: var(--active); }
+  #pull-refresh.spinning { animation: pull-refresh-spin 0.7s linear infinite; }
+  /* Brief positive confirmation after refreshAll() resolves — the spinner
+     alone only communicates "in progress," not "done," and most polls
+     don't visibly change anything on screen (nothing to compare against),
+     so without this a completed refresh looked indistinguishable from a
+     stuck one. */
+  #pull-refresh.done { color: var(--active); border-color: var(--active); transform: translate(-50%, 20px); }
+  @keyframes pull-refresh-spin { to { transform: translate(-50%, 20px) rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- Pull-to-refresh indicator — see initPullToRefresh() -->
+<div id="pull-refresh">↻</div>
+
+<!-- Always-visible HSM + presence status bar, with secondary icon buttons
+     (hub link, theme toggle) on the right of the same row -->
+<div class="status-row">
+  <div id="status-bar"></div>
+  <div class="topbar-icons">
+    <button class="icon-btn" id="open-hub-link" title="Open hub">⎋</button>
+    <button class="icon-btn" id="theme-toggle" title="Theme">◐</button>
+  </div>
+</div>
+
+<!-- Top bar -->
+<div class="topbar">
+  <span class="home-icon"></span>
+  <h1 id="dash-title">Home</h1>
+  <span class="spacer"></span>
+  <span id="dirty-badge" title="Layout has unsaved changes — click Save in Settings to persist">● Unsaved</span>
+  <span class="ws-dot" id="ws-dot" title="WebSocket"></span>
+  <span class="conn-dot" id="conn-dot"></span>
+  <button class="edit-mode-toggle" id="edit-mode-btn">Edit</button>
+  <button class="icon-btn" id="open-settings" title="Settings">⚙</button>
+</div>
+
+<!-- Dashboard navigation chips (hidden until there are custom/dynamic dashboards) -->
+<div id="dash-nav"></div>
+
+<!-- ── Main dashboard view ── -->
+<div id="view-main">
+  <div class="section" id="row1"></div>
+  <div class="section" id="row2"></div>
+  <div class="section" id="row3"></div>
+  <div class="split">
+    <div class="col" id="cameras"></div>
+    <div class="col" id="right-col"></div>
+  </div>
+  <div class="section" id="row-bottom"></div>
+</div>
+
+<!-- ── Dynamic dashboard view ── -->
+<div id="view-dynamic" style="display:none">
+  <div class="dyn-grid" id="dynamic-grid"></div>
+</div>
+
+<!-- ── Custom dashboard view ── -->
+<div id="view-custom" style="display:none">
+  <div class="dyn-grid" id="custom-grid"></div>
+  <div style="margin-top:8px">
+    <button class="btn secondary sm" id="custom-add-tile" style="display:none">+ Add Device</button>
+  </div>
+</div>
+
+<!-- ── Modals ── -->
+
+<!-- Settings -->
+<div class="modal" id="settings-modal">
+  <div class="modal-card">
+    <h2>Dashboard Settings</h2>
+    <div class="help">
+      Hub credentials (token) are saved to <strong>this browser only</strong> — never sent off the hub. Dashboard config (tiles, layout, visibility) can be saved to the hub for cross-device sync via <strong>Save Config to Hub</strong> below. Your hub's UID namespaces your config so multiple hubs can share one Worker.
+    </div>
+    <h3>Hub Connection</h3>
+    <div class="form-row">
+      <label>Hub Base URL — Cloud (<code>https://cloud.hubitat.com/api/HUB-UID</code>) or Tunnel hostname</label>
+      <input id="cfg-url" placeholder="https://cloud.hubitat.com/api/abc-uuid" />
+    </div>
+    <div class="form-row" id="hub-id-row" style="display:none">
+      <label>Hub ID <span style="font-size:11px;color:var(--tile-label)">(auto-detected from URL · namespaces your config)</span></label>
+      <input id="hub-id-display" readonly style="background:var(--tile-bg);color:var(--text-faint);cursor:default;font-family:monospace;font-size:12px" />
+    </div>
+    <div class="form-row">
+      <label>Maker API App ID</label>
+      <input id="cfg-app" placeholder="45" />
+    </div>
+    <div class="form-row">
+      <label>Access Token <span id="token-status" style="font-size:11px;margin-left:6px;color:var(--tile-label)"></span></label>
+      <input id="cfg-token" type="password" placeholder="Leave blank to keep existing token" />
+      <label style="margin-top:4px; font-size:12px">
+        <input type="checkbox" id="show-token-cb" /> Show value
+      </label>
+      <div class="help" style="margin-top:4px; font-size:11px">Saved to this browser only — never sent off the hub.</div>
+    </div>
+    <div class="form-row">
+      <label><input type="checkbox" id="cfg-is-cloud" /> This is a Hubitat Cloud URL (auto-detected from URL)</label>
+    </div>
+    <div class="form-row">
+      <label>Hub direct link <span style="font-size:11px;color:var(--tile-label)">(opens in a new tab from the ⎋ button above Edit/Settings — e.g. your hub's LAN admin UI)</span></label>
+      <input id="cfg-hub-link" placeholder="https://192.168.1.x or https://cloud.hubitat.com" />
+    </div>
+    <div class="form-row">
+      <label>Poll interval (seconds) — used as fallback when WebSocket is unavailable</label>
+      <input id="cfg-poll" type="number" min="2" max="60" value="5" />
+    </div>
+    <div class="form-row">
+      <label>Dashboard title</label>
+      <input id="cfg-title" placeholder="My Home Dashboard" />
+    </div>
+    <div class="form-row">
+      <label>Grid columns per section (applies to main dashboard rows)</label>
+      <select id="cfg-grid-cols">
+        <option value="2">2 columns</option>
+        <option value="3">3 columns (default)</option>
+        <option value="4">4 columns</option>
+        <option value="5">5 columns</option>
+        <option value="6">6 columns</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Tile height</label>
+      <select id="cfg-tile-h">
+        <option value="48">XS — 48 px</option>
+        <option value="64">S — 64 px</option>
+        <option value="80">M — 80 px (default)</option>
+        <option value="104">L — 104 px</option>
+        <option value="136">XL — 136 px</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Icon size <span id="cfg-icon-scale-out" style="color:var(--tile-text)">100%</span></label>
+      <input type="range" id="cfg-icon-scale" min="0.5" max="2.5" step="0.1" value="1" />
+    </div>
+    <div class="form-row">
+      <label>Nav chip accent color <span style="font-size:11px;color:var(--tile-label)">(Main + custom dashboard chips)</span></label>
+      <input type="color" id="cfg-chip-accent" value="#2d7fbf" style="height:36px;padding:4px;cursor:pointer" />
+    </div>
+    <div class="form-row">
+      <label>Auto-generated chip accent color <span style="font-size:11px;color:var(--tile-label)">(Switches, Lights, Locks, etc.)</span></label>
+      <input type="color" id="cfg-chip-accent-dynamic" value="#2d7fbf" style="height:36px;padding:4px;cursor:pointer" />
+    </div>
+    <div class="form-row">
+      <label>Theme <span style="font-size:11px;color:var(--tile-label)">(also toggled from the ◐ topbar button)</span></label>
+      <select id="cfg-theme">
+        <option value="auto">Auto (follows time of day)</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="test-conn">Reload Devices &amp; Test</button>
+      <button class="btn" id="save-cfg">💾 Save Config to Hub</button>
+      <button class="btn secondary" id="close-settings">Close</button>
+    </div>
+    <div class="help" style="margin-top:6px; font-size:11px">
+      <strong>Save Config to Hub</strong> — syncs tile layout, labels, and visibility to all devices. Hub token is <em>never</em> included.
+      <strong>Close</strong> — saves everything to this browser only.
+    </div>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn danger" id="reset-cfg">⚠ Reset Everything</button>
+      <span style="font-size:11px; color:var(--tile-label); align-self:center">Wipes all config from the hub and this browser — cannot be undone.</span>
+    </div>
+    <div id="conn-status"></div>
+
+    <h3>Status Bar</h3>
+    <div class="help">Select which presence sensors appear as chips at the top of every view.</div>
+    <div id="presence-picker-list" style="max-height:200px; overflow-y:auto; border:1px solid var(--tile-border); border-radius:4px; padding:8px; display:flex; flex-direction:column; gap:4px; margin-top:8px">
+      <div style="color:var(--text-dim);font-size:12px">Load devices first — click "Reload Devices &amp; Test" above.</div>
+    </div>
+
+    <h3>Custom Dashboards</h3>
+    <div class="help">Create a named dashboard and populate it with any devices from your Maker API. Access it from the nav bar.</div>
+    <div class="btn-row" style="margin-top:0">
+      <button class="btn secondary sm" id="new-custom-dashboard">+ New Dashboard</button>
+    </div>
+    <div id="custom-dash-list" style="margin-top:8px; display:flex; flex-direction:column; gap:6px"></div>
+
+    <h3 style="margin-top:16px">Auto-generated Dashboards</h3>
+    <div class="help">Automatically show navigation tabs for common device types found on your hub. Individual visibility can still be adjusted in the section below. To add new auto-generated groups, extend <code>DYNAMIC_GROUPS</code> in the source.</div>
+    <div class="form-row" style="margin-top:8px">
+      <label>
+        <input type="checkbox" id="cfg-auto-dynamic" />
+        Show auto-generated dashboards (Switches, Lights, Locks, Battery, Presence, Contact Sensors, Shades, Thermostats)
+      </label>
+    </div>
+
+    <h3 style="margin-top:16px">Dashboard Order &amp; Visibility</h3>
+    <div class="help">Drag to reorder dashboards. Uncheck to hide from navigation.</div>
+    <div id="dashboard-manager-list" style="max-height:300px; overflow-y:auto; border:1px solid var(--tile-border); border-radius:4px; padding:8px; display:flex; flex-direction:column; gap:6px; margin-top:8px"></div>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="btn sm secondary" id="reset-dashboards">Reset to Default</button>
+    </div>
+
+    <h3>Local Backup &amp; Restore</h3>
+    <div class="help">Download or paste your config as JSON. These operations work on your browser's copy — use <strong>Save to Hub</strong> above to push a restored config to all devices.</div>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="btn secondary" id="export-cfg">⬇ Download Config</button>
+      <button class="btn secondary" id="import-cfg-btn">⬆ Upload Config</button>
+      <input type="file" id="import-cfg-file" accept="application/json,.json" style="display:none" />
+      <button class="btn secondary" id="copy-cfg">📋 Copy</button>
+    </div>
+    <div class="form-row" style="margin-top:10px">
+      <label>Paste / edit JSON directly</label>
+      <textarea id="cfg-json" rows="5" style="font-family:ui-monospace,monospace;font-size:11px"></textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="apply-json">Apply Pasted JSON</button>
+      <button class="btn secondary" id="show-json">Show Current Config</button>
+    </div>
+    <div id="io-status"></div>
+  </div>
+</div>
+
+<!-- Picker (mode / HSM) -->
+<div class="modal" id="picker-modal">
+  <div class="modal-card">
+    <h2 id="picker-title">Select</h2>
+    <div id="picker-options" style="display:flex; flex-direction:column; gap:8px"></div>
+    <div class="btn-row">
+      <button class="btn secondary" id="picker-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Switch confirmation -->
+<div class="modal" id="confirm-modal">
+  <div class="modal-card">
+    <h2 id="confirm-title">Confirm</h2>
+    <p id="confirm-body"></p>
+    <div class="btn-row">
+      <button class="btn" id="confirm-yes">Yes, do it</button>
+      <button class="btn secondary" id="confirm-no">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Valve timer picker -->
+<div class="modal" id="valve-timer-modal">
+  <div class="modal-card">
+    <h2 id="valve-title">How long?</h2>
+    <div style="display:flex; flex-direction:column; gap:8px">
+      <button class="btn" id="valve-open-5">Open for 5 min</button>
+      <button class="btn" id="valve-open-30">Open for 30 min</button>
+      <button class="btn" id="valve-open-60">Open for 60 min</button>
+      <button class="btn" id="valve-open-90">Open for 90 min</button>
+      <button class="btn danger" id="valve-close">Close Valve</button>
+      <button class="btn secondary" id="valve-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Shade position picker -->
+<div class="modal" id="shade-position-modal">
+  <div class="modal-card">
+    <h2 id="shade-title">Shade Position</h2>
+    <div style="display:flex; flex-direction:column; gap:8px">
+      <button class="btn" id="shade-open">Open</button>
+      <button class="btn" id="shade-75">75% Open</button>
+      <button class="btn" id="shade-50">50% Open</button>
+      <button class="btn" id="shade-25">25% Open</button>
+      <button class="btn danger" id="shade-close">Close</button>
+      <button class="btn secondary" id="shade-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Thermostat control -->
+<div class="modal" id="thermostat-modal">
+  <div class="modal-card">
+    <h2 id="thermostat-title">Thermostat</h2>
+    <div id="thermostat-body"></div>
+    <div class="btn-row">
+      <button class="btn secondary" id="thermostat-cancel">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bulb / dimmer level picker -->
+<div class="modal" id="bulb-level-modal">
+  <div class="modal-card">
+    <h2 id="bulb-title">Light Level</h2>
+    <div style="display:flex; flex-direction:column; gap:8px">
+      <button class="btn" id="bulb-100">100% — Full brightness</button>
+      <button class="btn" id="bulb-75">75%</button>
+      <button class="btn" id="bulb-50">50%</button>
+      <button class="btn" id="bulb-25">25%</button>
+      <button class="btn danger" id="bulb-off">Turn Off</button>
+      <button class="btn secondary" id="bulb-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tile editor -->
+<div class="modal" id="tile-editor">
+  <div class="modal-card">
+    <h2 id="tile-editor-title">Edit Tile</h2>
+    <div class="form-row">
+      <label>Label</label>
+      <input id="te-label" />
+    </div>
+    <div class="form-row">
+      <label>Tile type</label>
+      <select id="te-kind">
+        <option value="switch">Switch (on/off)</option>
+        <option value="bulb">Bulb / Dimmer (level picker)</option>
+        <option value="lock">Lock (with battery)</option>
+        <option value="garage">Garage door</option>
+        <option value="contact">Contact sensor (open/closed)</option>
+        <option value="water">Water sensor (wet/dry)</option>
+        <option value="valve">Valve (open/closed)</option>
+        <option value="shade">Window Shade (positions)</option>
+        <option value="thermostat">Thermostat</option>
+        <option value="momentary">Momentary button (push)</option>
+        <option value="presence">Presence</option>
+        <option value="mode">Hubitat Mode</option>
+        <option value="hsm">HSM Status</option>
+        <option value="image">Virtual Image device</option>
+        <option value="dashboard-link">Dashboard / URL link</option>
+        <option value="text">Read-only attribute</option>
+        <option value="spacer">Spacer (blank gap)</option>
+        <option value="hidden">Hide this tile</option>
+      </select>
+    </div>
+    <div class="form-row" id="te-device-row">
+      <label>Hubitat device</label>
+      <select id="te-device"></select>
+    </div>
+    <div class="form-row" id="te-attr-row" style="display:none">
+      <label>Attribute to display <span id="te-attr-hint" style="font-size:11px;color:var(--tile-label)"></span></label>
+      <input id="te-attr" list="te-attr-list" placeholder="e.g. temperature, humidity…" autocomplete="off" />
+      <datalist id="te-attr-list"></datalist>
+      <label style="margin-top:6px; font-size:12px">
+        <input type="checkbox" id="te-render-html" />
+        Render value as HTML
+        <span style="font-size:11px;color:var(--tile-label);margin-left:4px">(for drivers like Device Watchdog that emit HTML-formatted reports)</span>
+      </label>
+    </div>
+    <div class="form-row" id="te-command-row" style="display:none">
+      <label>Command to send <span id="te-command-hint" style="font-size:11px;color:var(--tile-label)"></span></label>
+      <input id="te-command" list="te-command-list" placeholder="push" autocomplete="off" />
+      <datalist id="te-command-list"></datalist>
+      <label style="margin-top:6px; font-size:12px">Argument (optional)</label>
+      <input id="te-command-arg" placeholder="e.g. a room name, a level — only if the command needs one" autocomplete="off" />
+    </div>
+    <div class="form-row" id="te-url-row" style="display:none">
+      <label>Link URL (use <code>#dynamic/switches</code>, <code>#custom/name</code>, or any URL)</label>
+      <input id="te-url" placeholder="#dynamic/switches" />
+      <label style="margin-top:6px; font-size:12px">
+        <input type="checkbox" id="te-url-newtab" /> Open in new tab
+      </label>
+    </div>
+    <div class="form-row">
+      <label>Visual style</label>
+      <select id="te-style">
+        <option value="auto">Auto (based on state)</option>
+        <option value="dark">Dark (default)</option>
+        <option value="flat">Flat / light gray</option>
+        <option value="info">Info blue</option>
+      </select>
+    </div>
+    <div class="form-row" id="te-icon-row">
+      <label>Icon</label>
+      <div id="te-icon-single" style="display:flex;gap:8px">
+        <button type="button" class="btn secondary te-icon-btn" id="te-icon-btn">
+          <span class="te-icon-preview" id="te-icon-preview"></span>
+          <span id="te-icon-name">Default</span>
+        </button>
+        <button type="button" class="btn secondary" id="te-icon-clear" title="Use the default icon for this tile kind">Reset</button>
+      </div>
+      <div id="te-icon-dual" style="display:none;flex-direction:column;gap:10px">
+        <div>
+          <div class="te-icon-state-label" id="te-icon-on-label">On icon</div>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn secondary te-icon-btn" id="te-icon-on-btn">
+              <span class="te-icon-preview" id="te-icon-on-preview"></span>
+              <span id="te-icon-on-name">Default</span>
+            </button>
+            <button type="button" class="btn secondary" id="te-icon-on-clear" title="Use the default icon for this state">Reset</button>
+          </div>
+        </div>
+        <div>
+          <div class="te-icon-state-label" id="te-icon-off-label">Off icon</div>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn secondary te-icon-btn" id="te-icon-off-btn">
+              <span class="te-icon-preview" id="te-icon-off-preview"></span>
+              <span id="te-icon-off-name">Default</span>
+            </button>
+            <button type="button" class="btn secondary" id="te-icon-off-clear" title="Use the default icon for this state">Reset</button>
+          </div>
+        </div>
+      </div>
+      <input type="hidden" id="te-icon" />
+      <input type="hidden" id="te-icon-on" />
+      <input type="hidden" id="te-icon-off" />
+    </div>
+    <div class="form-row" id="te-confirm-row" style="display:none">
+      <label>
+        <input type="checkbox" id="te-require-confirm" />
+        Require tap confirmation before toggling
+        <span style="font-size:11px;color:var(--tile-label);margin-left:4px">(lock/garage: on by default)</span>
+      </label>
+    </div>
+    <div class="form-row" id="te-valve-timer-row" style="display:none">
+      <label>
+        <input type="checkbox" id="te-valve-timer" />
+        Show timer picker (5/30/60/90 min) instead of direct toggle
+        <span style="font-size:11px;color:var(--tile-label);margin-left:4px">(for timed-open valves)</span>
+      </label>
+    </div>
+    <div class="form-row" id="te-valve-cmd-row" style="display:none">
+      <label>Open command <span id="te-valve-open-hint" style="font-size:11px;color:var(--tile-label)"></span></label>
+      <input id="te-valve-open-cmd" list="te-valve-cmd-list" placeholder="open" autocomplete="off" />
+      <datalist id="te-valve-cmd-list"></datalist>
+      <label style="margin-top:6px">Close command</label>
+      <input id="te-valve-close-cmd" list="te-valve-cmd-list" placeholder="close" autocomplete="off" />
+      <div class="help" style="margin-top:4px; font-size:11px">
+        Defaults to the Valve capability's <code>open</code>/<code>close</code>. Change these if your
+        driver rejects them — some drivers can't accept a timed <code>open</code> because the Valve
+        capability already defines a no-argument <code>open</code>, and the hub returns a generic
+        "unexpected error". Pick a command the dropdown shows this device actually exposes.
+        With the timer picker on, the minutes are sent as the open command's argument.
+      </div>
+    </div>
+    <div class="form-row" id="te-orient-row" style="display:none">
+      <label>Image orientation</label>
+      <select id="te-image-orient">
+        <option value="landscape">Landscape (16:9, default)</option>
+        <option value="portrait">Portrait (9:16, taller)</option>
+      </select>
+    </div>
+    <div class="form-row" id="te-fit-row" style="display:none">
+      <label>Image fit</label>
+      <select id="te-image-fit">
+        <option value="cover">Fill tile, crop edges (default — best for cameras)</option>
+        <option value="contain">Show whole image, letterbox if needed (best for charts/graphics)</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Tile width</label>
+      <select id="te-col-span">
+        <option value="0.5">Half (½ column)</option>
+        <option value="1">Normal (1 column)</option>
+        <option value="2">Wide (2 columns)</option>
+        <option value="3">Full row (3 columns)</option>
+      </select>
+    </div>
+    <div class="form-row" id="te-row-span-row">
+      <label>Tile height (rows)</label>
+      <select id="te-row-span">
+        <option value="1">1 row</option>
+        <option value="2">2 rows</option>
+        <option value="3">3 rows</option>
+        <option value="4">4 rows</option>
+      </select>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="te-save">Save</button>
+      <button class="btn secondary" id="te-cancel">Cancel</button>
+      <button class="btn danger" id="te-delete">Delete Tile</button>
+      <button class="btn secondary" id="te-duplicate">Duplicate</button>
+      <button class="btn secondary" id="te-clear" style="margin-left:auto">Reset defaults</button>
+    </div>
+  </div>
+</div>
+
+<!-- Icon picker -->
+<div class="modal" id="icon-picker-modal">
+  <div class="modal-card">
+    <h2>Choose an Icon</h2>
+    <div class="form-row">
+      <input id="icon-picker-search" placeholder="Search icons… (e.g. fan, lock, valve)" autocomplete="off" />
+    </div>
+    <div id="icon-picker-grid"></div>
+    <div class="btn-row">
+      <button class="btn secondary" id="icon-picker-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Device picker (for custom dashboards — supports multi-select) -->
+<div class="modal" id="device-picker-modal">
+  <div class="modal-card">
+    <h2 id="device-picker-title">Add Device</h2>
+    <div class="form-row">
+      <input id="device-search" placeholder="Search by name…" autocomplete="off" />
+    </div>
+    <div id="device-list"></div>
+    <div class="btn-row">
+      <button class="btn" id="device-picker-add" style="display:none">
+        Add <span id="device-picker-count">0</span> Selected
+      </button>
+      <button class="btn secondary" id="device-picker-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- New custom dashboard name dialog -->
+<div class="modal" id="new-dash-modal">
+  <div class="modal-card" style="max-width:400px">
+    <h2>New Custom Dashboard</h2>
+    <div class="form-row">
+      <label>Name (used in URL: #custom/name)</label>
+      <input id="new-dash-name" placeholder="my-cameras" />
+    </div>
+    <div class="form-row">
+      <label>Title shown in nav bar</label>
+      <input id="new-dash-title" placeholder="My Cameras" />
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="new-dash-create">Create</button>
+      <button class="btn secondary" id="new-dash-cancel">Cancel</button>
+    </div>
+    <div id="new-dash-status"></div>
+  </div>
+</div>
+
+<!-- Lightbox (full-screen image viewer) -->
+<div id="lightbox-modal">
+  <button id="lightbox-close" title="Close">✕</button>
+  <img id="lightbox-img" alt="" />
+  <span id="lightbox-label"></span>
+</div>
+
+<!-- hnd-build: cfce3bdace -->
+<style>#hub-id-row { display: none !important; }</style>
+<div id="hnd-boot" style="position:fixed;inset:0;z-index:99999;background:#0d1117;color:#e8e8ea;font:14px/1.5 -apple-system,system-ui,sans-serif;padding:24px;overflow:auto">
+<h2 style="margin:0 0 8px">Loading dashboard&hellip;</h2>
+<p style="color:#9a9ba3;margin:0">Fetching the app from this hub&rsquo;s File Manager.</p>
+</div>
+<script>
+(function () {
+  'use strict';
+  var PARTS = ["hnd-app-1.js","hnd-app-2.js","hnd-app-3.js"];
+  var VERSION = "cfce3bdace";
+  var token = new URLSearchParams(location.search).get('access_token') || '';
+
+  function assetUrl(name) {
+    return 'asset?f=' + encodeURIComponent(name) +
+           '&v=' + encodeURIComponent(VERSION) +
+           (token ? '&access_token=' + encodeURIComponent(token) : '');
+  }
+
+  function fail(msg, detail) {
+    var el = document.getElementById('hnd-boot');
+    if (el) {
+      el.innerHTML = '<h2>Dashboard failed to load</h2><p>' + msg + '</p>' +
+        (detail ? '<pre>' + String(detail).replace(/[<&]/g, function (c) {
+          return c === '<' ? '&lt;' : '&amp;';
+        }) + '</pre>' : '') +
+        '<p>Check that every dist/ file was uploaded to Hubitat&rsquo;s File Manager ' +
+        '(Settings &rarr; File Manager), then reload.</p>';
+      el.style.display = '';
+    }
+  }
+
+  // Hide the Hub Connection credential fields. On this build the Maker API URL,
+  // app ID and token come from the App's own settings page on the hub, so these
+  // inputs are inert and misleading.
+  //
+  // They are HIDDEN, not removed: the upstream code reads these elements by id
+  // in readSettingsForm() and on import, so deleting them would turn a cosmetic
+  // cleanup into a null-dereference. Hiding keeps every code path intact.
+  //
+  // Note this cannot simply hide "everything between the Hub Connection heading
+  // and the next one" — upstream puts the display settings and the save buttons
+  // in that same stretch, with no heading of their own.
+  function hideHubConnectionFields() {
+    try {
+      var ids = ['cfg-url', 'cfg-app', 'cfg-token', 'cfg-is-cloud'];
+      for (var i = 0; i < ids.length; i++) {
+        var el = document.getElementById(ids[i]);
+        var row = el && el.closest ? el.closest('.form-row') : null;
+        if (row) row.style.display = 'none';
+      }
+      var modal = document.getElementById('settings-modal');
+      if (!modal) return;
+      var h3s = modal.getElementsByTagName('h3');
+      for (var j = 0; j < h3s.length; j++) {
+        if ((h3s[j].textContent || '').trim() === 'Hub Connection') {
+          h3s[j].style.display = 'none';
+          break;
+        }
+      }
+      // The panel's opening blurb explains browser-vs-Worker credential storage,
+      // which does not apply here. Replaced with the one thing that is still
+      // worth saying: why there are no credential fields on this screen.
+      //
+      // It deliberately does NOT say where the layout is stored — that depends
+      // on the local/hub toggle below it, which states it accurately for the
+      // current mode. A fixed claim here would be wrong half the time.
+      var card = modal.querySelector('.modal-card');
+      var firstHelp = card ? card.querySelector('.help') : null;
+      if (firstHelp && /credential|token/i.test(firstHelp.textContent || '')) {
+        firstHelp.textContent =
+          'Maker API credentials are set on this app\'s own settings page in ' +
+          'Hubitat, not here.';
+      }
+    } catch (e) {
+      console.warn('native UI tweak skipped', e);
+    }
+  }
+
+  // Where does this browser's layout live — on the hub (shared) or here only?
+  // Adds the toggle to the settings panel and keeps the rest of the panel
+  // honest about the current choice.
+  var MODE_KEY = 'hnd-config-mode';
+  // Upstream's localStorage key. Read directly so "publish my local layout" can
+  // work from here without reaching into the app's closure.
+  var CACHE_KEY = 'hubitat-dash-v4-cache';
+
+  function isLocalMode() {
+    var q = new URLSearchParams(location.search).get('local');
+    if (q === '1') return true;
+    if (q === '0') return false;
+    try { return localStorage.getItem(MODE_KEY) === 'local'; } catch (e) { return false; }
+  }
+
+  // Reload without ?local=, so the remembered mode is what takes effect.
+  function reloadWithStoredMode() {
+    var u = new URL(location.href);
+    u.searchParams.delete('local');
+    location.href = u.toString();
+  }
+
+  function setMode(mode) {
+    try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
+  }
+
+  // Build the /config payload from the browser's cached layout. Mirrors what the
+  // app's own save sends, minus the hub block — Maker API credentials live in
+  // the App's settings on the hub and must not be overwritten from a browser.
+  function publishLocalLayout(token) {
+    var raw = null;
+    try { raw = localStorage.getItem(CACHE_KEY); } catch (e) {}
+    if (!raw) return Promise.reject(new Error('no layout cached in this browser yet'));
+    var c = JSON.parse(raw);
+    var payload = {
+      dashboard: {
+        title: c.title, pollSec: c.pollSec, slots: c.slots, layout: c.layout,
+        gridCols: c.gridCols, tileH: c.tileH, iconScale: c.iconScale,
+        hubExternalUrl: c.hubExternalUrl, chipAccent: c.chipAccent,
+        chipAccentDynamic: c.chipAccentDynamic, theme: c.theme,
+      },
+    };
+    if (c.dynamic) payload.dynamic = c.dynamic;
+    if (c.custom) payload.custom = c.custom;
+    if (c.dashboardsVisible) payload.dashboardsVisible = c.dashboardsVisible;
+    if (c.dashboardsOrder) payload.dashboardsOrder = c.dashboardsOrder;
+    if (c.statusBarPresenceDevices) payload.statusBarPresenceDevices = c.statusBarPresenceDevices;
+    return fetch('config' + (token ? '?access_token=' + encodeURIComponent(token) : ''), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return true;
+    });
+  }
+
+  // Copy the hub's stored layout into this browser's cache, so switching to
+  // local mode starts from exactly what is on screen and then diverges.
+  //
+  // This is not optional. boot() applies the hub config to memory but never
+  // writes it to the browser cache, so without this step switching to local
+  // would reload whatever stale cache happened to be there — not the layout the
+  // user was just looking at.
+  function copyHubConfigToLocal(token) {
+    return fetch('config' + (token ? '?access_token=' + encodeURIComponent(token) : ''))
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (c) {
+        var existing = {};
+        try {
+          var raw = localStorage.getItem(CACHE_KEY);
+          if (raw) existing = JSON.parse(raw);
+        } catch (e) {}
+
+        var d = c.dashboard || {};
+        var cache = existing;
+        function put(key, value) { if (value !== undefined && value !== null) cache[key] = value; }
+
+        put('title', d.title); put('pollSec', d.pollSec); put('slots', d.slots);
+        put('layout', d.layout); put('gridCols', d.gridCols); put('tileH', d.tileH);
+        put('iconScale', d.iconScale); put('hubExternalUrl', d.hubExternalUrl);
+        put('chipAccent', d.chipAccent); put('chipAccentDynamic', d.chipAccentDynamic);
+        put('theme', d.theme);
+        if (c.hub) {
+          put('hubBaseUrl', c.hub.baseUrl);
+          put('hubAppId', c.hub.appId);
+          put('hubIsCloud', c.hub.isCloud);
+          put('hubHasToken', c.hub.hasToken);
+        }
+        put('dynamic', c.dynamic); put('custom', c.custom);
+        put('dashboardsVisible', c.dashboardsVisible);
+        put('dashboardsOrder', c.dashboardsOrder);
+        put('statusBarPresenceDevices', c.statusBarPresenceDevices);
+
+        localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+        return true;
+      });
+  }
+
+  function installConfigModeUi() {
+    try {
+      var local = isLocalMode();
+      var save = document.getElementById('save-cfg');
+      if (save) save.style.display = local ? 'none' : '';
+
+      var row = save && save.closest ? save.closest('.btn-row') : null;
+
+      // The note under those buttons explains "Save Config to Hub", which is
+      // hidden in local mode — leaving it would describe a button that is not
+      // there.
+      if (row && local) {
+        var after = row.nextElementSibling;
+        if (after && after.className && after.className.indexOf('help') !== -1) {
+          after.style.display = 'none';
+        }
+      }
+      if (!row || document.getElementById('hnd-mode-box')) return;
+
+      var box = document.createElement('div');
+      box.id = 'hnd-mode-box';
+      box.className = 'form-row';
+      box.innerHTML =
+        '<label>Where this dashboard\'s layout is stored</label>' +
+        '<select id="hnd-mode-select">' +
+        '<option value="hub">On the hub — shared by every browser</option>' +
+        '<option value="local">In this browser only — private layout</option>' +
+        '</select>' +
+        '<div class="help" id="hnd-mode-help" style="margin-top:4px;font-size:11px"></div>';
+      row.parentNode.insertBefore(box, row);
+
+      var sel = document.getElementById('hnd-mode-select');
+      var help = document.getElementById('hnd-mode-help');
+      sel.value = local ? 'local' : 'hub';
+      help.innerHTML = local
+        ? 'This browser keeps its own layout. The hub\'s shared config is neither ' +
+          'read nor written — devices and commands still go to the same hub.'
+        : 'The layout is stored on the hub, so every browser opening this link sees ' +
+          'the same dashboard.';
+
+      if (local) {
+        var pub = document.createElement('button');
+        pub.className = 'btn secondary';
+        pub.id = 'hnd-publish';
+        pub.textContent = '⬆ Publish this layout to the hub';
+        pub.style.marginTop = '6px';
+        pub.addEventListener('click', function () {
+          if (!confirm('Replace the hub\'s shared layout with this browser\'s layout, ' +
+                       'and switch this browser back to the shared layout?')) return;
+          var token = new URLSearchParams(location.search).get('access_token') || '';
+          publishLocalLayout(token).then(function () {
+            setMode('hub');
+            reloadWithStoredMode();
+          }).catch(function (e) {
+            alert('Could not publish to the hub: ' + e.message);
+          });
+        });
+        box.appendChild(pub);
+      }
+
+      sel.addEventListener('change', function () {
+        if (sel.value === 'local') {
+          // Take a copy of what is on screen first, then stop syncing. Without
+          // the copy this would reload a stale browser cache instead of the
+          // hub layout the user is currently looking at.
+          sel.disabled = true;
+          help.textContent = 'Copying the hub layout into this browser…';
+          var t = new URLSearchParams(location.search).get('access_token') || '';
+          copyHubConfigToLocal(t).then(function () {
+            setMode('local');
+            reloadWithStoredMode();
+          }).catch(function (e) {
+            sel.disabled = false;
+            sel.value = 'hub';
+            help.textContent = '';
+            alert('Could not copy the hub layout into this browser: ' + e.message +
+                  '\n\nStaying on the shared layout.');
+          });
+          return;
+        }
+        // Switching back adopts the hub's layout, replacing this browser's.
+        // Cancel aborts the switch entirely — no hidden second meaning.
+        if (!confirm('Switch to the shared layout stored on the hub?\n\n' +
+                     'This browser\'s private layout will be replaced by the shared one. ' +
+                     'To keep it, cancel and use "Publish this layout to the hub" instead, ' +
+                     'or Download Config first.')) {
+          sel.value = 'local';
+          return;
+        }
+        setMode('hub');
+        reloadWithStoredMode();
+      });
+    } catch (e) {
+      console.warn('config mode UI skipped', e);
+    }
+  }
+
+  Promise.all(PARTS.map(function (name) {
+    return fetch(assetUrl(name)).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' loading ' + name);
+      return r.text();
+    });
+  })).then(function (texts) {
+    var boot = document.getElementById('hnd-boot');
+    if (boot) boot.style.display = 'none';
+    // Indirect eval: run in global scope, exactly as the original inline
+    // <script> would have. The rejoined text is byte-identical to upstream's
+    // program, so behaviour matches the Cloudflare build.
+    (0, eval)(texts.join('\n'));
+    hideHubConnectionFields();
+    installConfigModeUi();
+  }).catch(function (e) {
+    fail('Could not load the dashboard code from the hub.', e && e.message);
+  });
+})();
+</script>
+</body>
+</html>

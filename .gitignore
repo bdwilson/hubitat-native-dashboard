@@ -1,0 +1,7 @@
+# dist/ IS committed. It is the distribution: the app's "Install / update
+# dashboard UI" button fetches those files from this repo over raw.githubusercontent,
+# so they have to exist here. Regenerate with `node build/build.mjs` whenever
+# cf-hubitat-dashboard's frontend changes.
+
+node_modules/
+*.log
