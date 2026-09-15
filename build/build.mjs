@@ -30,27 +30,9 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { applyPatches, applyRelabels } from './patches.mjs';
-import { createZip } from './zip.mjs';
+import { applyPatches, applyRelabels, checkGuards } from './patches.mjs';
 
-/**
- * Hubitat bundle identity. A bundle is a flat ZIP of `<namespace>.<Name>.groovy`
- * files plus install.txt/update.txt, each of which is:
- *   line 1: namespace
- *   line 2: bundle name
- *   line 3+: `app|driver|library <file> [oauthClientId] [oauthClientSecret]`
- * Confirmed by unpacking real published bundles, not from documentation.
- *
- * The OAuth client id/secret fields are deliberately omitted. Bundles *can*
- * carry them so OAuth arrives pre-enabled, but those credentials would then be
- * identical for everyone who installs from this repo. Skipping them costs one
- * click ("OAuth -> Enable OAuth in App") and keeps no shared secret in a public
- * repository.
- */
-const BUNDLE_NAMESPACE = 'bdwilson';
-const BUNDLE_NAME = 'Hubitat Native Dashboard';
 const APP_SOURCE = 'app/HubitatNativeDashboard.groovy';
-const BUNDLE_APP_FILE = 'bdwilson.HubitatNativeDashboard.groovy';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -499,6 +481,11 @@ async function main() {
   const upstreamHash = createHash('sha256').update(raw).digest('hex').slice(0, 12);
   console.log(`upstream: ${Buffer.byteLength(raw, 'utf8').toLocaleString()} bytes, sha256:${upstreamHash}`);
 
+  // Before patching: catch upstream ADDING a site this build diverges from.
+  // applyPatches only notices when code it already rewrites changes shape.
+  const guards = checkGuards(raw);
+  console.log(`guards:  ${guards.length} ok (${guards.map((g) => `${g.name}=${g.hits}`).join(', ')})`);
+
   const { out: transportPatched, applied } = applyPatches(raw);
   console.log(`patches: ${applied.length} applied (${applied.join(', ')})`);
 
@@ -562,19 +549,14 @@ async function main() {
     await writeFile(path.join(outDir, name), content, 'utf8');
   }
 
-  // Hubitat bundle: the app code only. Bundles cannot carry File Manager files
+  // No bundle ZIP is built. A bundle could only ever carry the app's Groovy
   // (verified by unpacking published bundles — entries are only app/driver/
-  // library), so the UI chunks still have to get there another way: either the
-  // app's own "Install/update dashboard UI" button, or a manual upload.
-  const appSource = await readFile(path.resolve(REPO_ROOT, APP_SOURCE), 'utf8');
-  const bundleManifest =
-    `${BUNDLE_NAMESPACE}\n${BUNDLE_NAME}\napp ${BUNDLE_APP_FILE}\n`;
-  const bundleZip = createZip([
-    { name: BUNDLE_APP_FILE, data: appSource },
-    { name: 'install.txt', data: bundleManifest },
-    { name: 'update.txt', data: bundleManifest },
-  ]);
-  await writeFile(path.join(outDir, 'hubitat-native-dashboard.zip'), bundleZip);
+  // library, never File Manager files), so it installed one file and left the
+  // UI chunks to be fetched separately anyway. Hubitat Package Manager does
+  // that same one-file install AND enables OAuth on the way in, via "oauth":
+  // true in packageManifest.json — without the shared-client-secret problem
+  // that kept this build's bundle from pre-enabling it. HPM also gives users
+  // update notifications, which a ZIP cannot. See packageManifest.json.
 
   // The app reads this to know what to serve and to reject anything else.
   const manifest = {
@@ -588,7 +570,6 @@ async function main() {
     builtAt,
     shell: 'hnd-shell.html',
     chunks: chunkNames,
-    bundle: 'hubitat-native-dashboard.zip',
     patches: applied,
     relabels: relabelCounts.filter((c) => c.hits > 0).length,
     bytes: Object.fromEntries(files.map(([n, c]) => [n, Buffer.byteLength(c, 'utf8')])),
@@ -627,7 +608,7 @@ async function main() {
 
   console.log(
     `\nNext:\n` +
-      `  App code:  install ${args.out}/hubitat-native-dashboard.zip via Bundles, or paste ${APP_SOURCE}.\n` +
+      `  App code:  install via HPM, or paste/Import ${APP_SOURCE} in Apps Code.\n` +
       `  UI files:  use the app's "Install/update dashboard UI" button, or upload the\n` +
       `             hnd-* files in ${args.out}/ to Settings -> File Manager by hand.`,
   );

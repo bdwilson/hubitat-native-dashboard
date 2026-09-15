@@ -57,6 +57,14 @@ jobs:
       - name: Check the app compiles
         run: groovy build/check-groovy.groovy app/HubitatNativeDashboard.groovy
 
+      # importUrl and packageManifest.json's location must name the branch the
+      # file is actually on — or `main` when this is the PR that merges it.
+      # Both are re-fetched by users (Apps Code "Import", and HPM's update
+      # check), so a stale one silently serves a dead branch. See CLAUDE.md,
+      # "The importUrl rule".
+      - name: Check importUrl matches this branch
+        run: node build/check-import-url.mjs
+
       # No --source: falls back to fetching cf-hubitat-dashboard's frontend from
       # GitHub. Fails if a transport patch no longer matches, or if any chunk
       # exceeds Hubitat's File Manager / cloud response ceilings.

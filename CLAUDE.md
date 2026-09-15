@@ -141,9 +141,9 @@ The upstream app is one big IIFE. Splitting it across `<script>` tags would tear
 
 Two mechanisms, and it matters which does what:
 
-- **Bundles** (`dist/hubitat-native-dashboard.zip`, built by `build/build.mjs`). A bundle is a **flat ZIP** of `<namespace>.<Name>.groovy` files plus `install.txt`/`update.txt`, each of which is: line 1 namespace, line 2 bundle name, then `app|driver|library <file> [oauthClientId] [oauthClientSecret]`. **Verified by unpacking real published bundles** (thebearmay's webCoRE/AirThings/secureLogin), not from documentation — docs2.hubitat.com is blocked from this environment.
-  - **A bundle CANNOT carry File Manager files.** Entry types are only app/driver/library; no published bundle examined contained anything but Groovy and the two manifests. So bundles solve app-code install and nothing about the UI chunks.
-  - The OAuth client id/secret fields are **deliberately left empty**. They would otherwise be one shared secret across every install from this public repo, to save a single click.
+- **Hubitat Package Manager** (`packageManifest.json`). Ships the app's Groovy only, and sets `"oauth": true` so HPM enables OAuth during install — the hub mints its own credentials, so there is no shared secret. Follows the conventions in **bdwilson/hubitat**'s CLAUDE.md: stable UUID `id` per app entry (never changed on later releases), `version`/`dateReleased`/`releaseNotes` bumped on release, and `location` pointing at whichever branch the file actually lives on.
+  - **This repo previously shipped a bundle ZIP instead** (`dist/hubitat-native-dashboard.zip` + `build/zip.mjs`). It was removed as strictly dominated. A bundle is a flat ZIP of `<namespace>.<Name>.groovy` plus `install.txt`/`update.txt`, and **cannot carry File Manager files** — entry types are only app/driver/library (verified by unpacking thebearmay's published bundles; docs2.hubitat.com is blocked from this environment). So it installed exactly one Groovy file and did nothing for the UI chunks. Its `oauthClientId`/`oauthClientSecret` fields were left empty on purpose, because filling them would bake one shared secret into every install from this public repo — which cost users a manual "Enable OAuth" click. HPM does the same one-file install, enables OAuth without any shared secret, and adds update notifications a ZIP cannot. Don't reintroduce the bundle.
+  - **The UI is NOT in the package.** Only the app is. That is what makes a frontend change require no app update and generate no HPM update prompt — the app fetches the UI itself (below).
 - **Self-install** (`installUiFiles()` in the app). Hubitat exposes built-in `uploadHubFile(name, bytes)` / `downloadHubFile(name)` since **2.3.4.134**, so the app writes its own File Manager files. This is why `dist/` is **committed**: the button fetches those files from this repo's raw GitHub URLs.
   - This is the only outbound call the project ever makes, and only on a button press. Runtime stays entirely local. `uiSourceUrl` lets a user point it elsewhere.
   - `downloadHubFile()` is also now the preferred *read* path, falling back to the HTTP self-call on older firmware.
@@ -162,10 +162,15 @@ Byte sizes are compared as **UTF-8 bytes on both sides** (`Buffer.byteLength` in
 
 ### The transport seam
 
-Everything that differs between the Cloudflare build and this one lives in `build/patches.mjs`, in two deliberately different categories:
+Everything that differs between the Cloudflare build and this one lives in `build/patches.mjs`, in three deliberately different categories:
 
-- **`PATCHES`** — semantic. Asserted: each **must** match exactly once or the build fails loudly, because these patterns match code in a repo this one does not control and a silent miss means a broken network layer.
+- **`PATCHES`** — the transformation itself, and the defence against **syntactic** drift. Each **must** match exactly `count` times or the build fails loudly, because these patterns match code in a repo this one does not control and a silent miss means a broken network layer.
+- **`GUARDS`** — the defence against **semantic** drift, counted against the raw source *before* any patch runs. See below; this is the category people forget exists.
 - **`RELABELS`** — cosmetic wording (KV/Cloudflare → hub). Best-effort replace-all; a miss is reported, never fatal. A button saying the wrong word is not worth blocking a build over.
+
+**Why `GUARDS` had to exist.** `PATCHES` only ever inspects text it already rewrites. It cannot notice upstream *adding* something new that should have been patched — nothing asserts on code no patch mentions, so the build goes green and the divergence ships. That is not hypothetical: cf-hubitat-dashboard PR #46 added two fresh `cfg.hubIsCloud` sites, both encoding the exact predicate `websocket-cloud-guard` exists to reject, and this build sailed through it. A `?local=1` browser ended up never reconnecting a dropped socket.
+
+A guard pins the occurrence count of an upstream construct this build has made a considered, different choice about. When one trips, the fix is **a decision, not a number bump**: look at the new site, patch it or satisfy yourself upstream's behaviour is right here too, then update `expect` with a note saying which. Current guards: `cfg.hubIsCloud` (11), `fetch(` (5), `localStorage` (3).
 
 `RELABELS` must cover **runtime strings, not just markup**. The first pass only caught static labels, and a user hit a `confirm()` during *Reset Everything* asking about wiping "KV" on a hub with no Cloudflare anywhere. When adding one, grep the built `dist/` output, not just the source markup. Function names (`fetchConfigFromWorker`, `pushConfigToWorker`) and code comments are deliberately left alone — renaming them is churn with no user-facing benefit and more drift surface.
 
@@ -195,13 +200,93 @@ Sub-paths go in a query param because Hubitat's colon-style path-variable mappin
 
 **If a patch stops matching**, upstream changed. Go read the relevant code in cf-hubitat-dashboard and update the patch — do not loosen it into a regex that "probably still works."
 
-## CI
+## The automated build — what runs, when, and why
 
-`.github/workflows/build.yml` compiles the app with `check-groovy.groovy`, builds `dist/`, and commits it back. `dist/` is committed rather than uploaded as an artifact because the app's self-install button fetches it from this repo.
+This is the spine of the project. Everything else is downstream of it.
 
-**The build must stay reproducible** or CI commits noise on every nightly run. Two rules follow from that: `builtAt` is reused when the build id is unchanged, and no source *path* is recorded in the manifest (it differs between a local checkout and CI, and would leak an absolute path into a public repo). Verified: two consecutive builds, and a local-source vs GitHub-source build, all produce byte-identical `dist/`. If you add a field to the manifest, make sure it is content-derived.
+### The model in one sentence
 
-The push trigger excludes `dist/**` so the workflow's own commit cannot retrigger it. The nightly run doubles as upstream-drift detection — an asserted patch that stops matching fails the run and names itself.
+**The frontend is never vendored here.** `build/build.mjs` reads cf-hubitat-dashboard's `src/assets/index.html` at build time, applies the transport patches, and chunks the result — so there is no second copy of the production dashboard in this repo to drift out of sync, and upstream feature work arrives without anyone porting it.
+
+### Where the source comes from
+
+`resolveSource()`, in order of preference:
+
+1. `--source <path-or-url>`
+2. `$CF_DASHBOARD_SRC`
+3. a sibling checkout at `../cf-hubitat-dashboard/src/assets/index.html`
+4. `https://raw.githubusercontent.com/bdwilson/cf-hubitat-dashboard/main/src/assets/index.html`
+
+CI passes no `--source`, so it takes (4) — live from upstream `main`. That is what makes the nightly run a sync.
+
+### What one build does
+
+1. Read upstream `index.html` (~280 KB), hash it (`upstreamSha256`)
+2. **`checkGuards(raw)`** — count-pinned constructs, *before* patching
+3. **`applyPatches(raw)`** — 14 asserted transport rewrites
+4. **`applyRelabels(...)`** — 17 best-effort wording swaps
+5. Split into `hnd-shell.html` (head + CSS + body + loader) and the app JS
+6. Chunk the JS under both platform ceilings
+7. Write `dist/` + `hnd-manifest.json`
+
+### The three triggers
+
+`.github/workflows/build.yml`:
+
+| Trigger | When | What it's for |
+|---|---|---|
+| `push` | `app/**`, `build/**`, the workflow itself | Rebuild when *this* repo changes |
+| `schedule` | `17 6 * * *` daily | **The sync.** Picks up upstream frontend changes and catches drift early |
+| `workflow_dispatch` | Manual button | Rebuild on demand |
+
+The `push` trigger **deliberately excludes `dist/**`** so the workflow's own commit cannot retrigger it. Don't add it back.
+
+### The four gates, and what each catches
+
+A run fails, rather than shipping something subtly wrong, when:
+
+1. **Groovy won't compile** — `check-groovy.groovy` at `CLASS_GENERATION` (the phase that catches what the hub's editor rejects on Save; `CONVERSION` and `SEMANTIC_ANALYSIS` both let this repo's historical `Modifier 'private' not allowed here` bug through)
+2. **`importUrl` is stale** — `check-import-url.mjs`, see below
+3. **A guard count moved** — upstream added/removed a site this build diverges from
+4. **A patch stopped matching, or a chunk outgrew a ceiling** — `FILE_MANAGER_MAX` 124 KB, `CLOUD_RESPONSE_MAX` 118 KB
+
+Gates 3 and 4 are why the nightly run is drift detection and not just a rebuild.
+
+### Reproducibility is a hard requirement
+
+**The build must be byte-reproducible** or CI commits noise on every nightly run. Two rules follow: `builtAt` is reused when the build id is unchanged, and no source *path* is recorded in the manifest (it differs between a local checkout and CI, and would leak an absolute path into a public repo). Verified: two consecutive builds, and a local-source vs GitHub-source build, all produce byte-identical `dist/`. **If you add a manifest field, make it content-derived.**
+
+### Why `dist/` is committed
+
+Because the app's **"Install / update dashboard UI"** button fetches those files from this repo's raw GitHub URLs. As workflow artifacts they would have nothing to install from. This is the only outbound call the project ever makes, and only on a button press.
+
+### Two update paths, deliberately independent
+
+| What | How it updates | How often |
+|---|---|---|
+| App code (Groovy) | HPM *Update*, or Apps Code **Import** | Rarely — only when the app changes |
+| Dashboard UI (`hnd-*`) | The app's own **"Install / update dashboard UI"** button | Often — every upstream frontend change |
+
+The HPM package ships **the app only**. That is the whole reason a frontend change needs no app update and raises no HPM update prompt. Do not add `dist/` to `packageManifest.json`.
+
+## The importUrl rule
+
+Adopted from **bdwilson/hubitat**'s CLAUDE.md, restated for this repo (default branch `main`, not `master`). It is a **standing rule, active on every commit** — not something to fix just before a release.
+
+> Reading a `.groovy` file's `importUrl` must tell you exactly which branch that file currently lives on — never early, never stale, never a leftover from a previous branch.
+
+Concretely:
+
+- **On `main`**: `importUrl` points at `main`. This is the guarantee that matters — whatever merges is immediately re-importable by every user who installed via Import or HPM, because the URL they already hold resolves to the code that just landed.
+- **On a feature branch**: point at *that same branch* from the first commit that adds or touches the file, even if release is imminent.
+- **In the PR that merges to `main`**: flip to `main`. This happens exactly once, inside the merging PR — never as its own earlier commit.
+- **Pointing at any other branch is always wrong.**
+
+`packageManifest.json`'s `apps[].location` follows the identical rule, because HPM resolves it at install and update time. A stale location is the same bug wearing different clothes.
+
+**This is enforced, not remembered.** `build/check-import-url.mjs` runs in CI and fails the build otherwise. It exists because `importUrl` sat on `claude/modifier-syntax-error-188-lkzmfi` for months after that branch merged — so anyone hitting Import re-fetched a dead branch instead of current code, and nothing anywhere said so. Run it locally with `node build/check-import-url.mjs`.
+
+When releasing, also follow bdwilson/hubitat's other two release steps: bump `version`/`dateReleased`/`releaseNotes` in `packageManifest.json` (**never** change an app entry's `id` — HPM tracks the package by it), and add an entry to that repo's root `repository.json` if this package isn't listed yet.
 
 ## Tooling that exists now (this environment CAN test some things)
 
@@ -221,13 +306,13 @@ NOTICE                 — attribution for patterns adapted from evdev/hubitat-m
 app/
   HubitatNativeDashboard.groovy   — the App: OAuth, mappings, asset serving, Maker API proxy, config API
 build/
-  build.mjs            — reads upstream frontend, patches, chunks, enforces size ceilings, builds the bundle
-  patches.mjs          — asserted transport PATCHES + best-effort cosmetic RELABELS
-  zip.mjs              — dependency-free store-only ZIP writer, for the bundle
+  build.mjs            — reads upstream frontend, patches, chunks, enforces size ceilings
+  patches.mjs          — asserted transport PATCHES, count-pinned GUARDS, best-effort RELABELS
   dev-server.mjs       — local stand-in for the app; simulation, not the real thing
   check-groovy.groovy  — compile the app without a hub
-dist/                  — COMMITTED build output: the UI chunks the app self-installs from,
-                         plus the Hubitat bundle ZIP
+  check-import-url.mjs — enforce the importUrl rule (CI gate)
+packageManifest.json   — HPM package: the app's Groovy only, with oauth enablement
+dist/                  — COMMITTED build output: the UI chunks the app self-installs from
 ```
 
 ## Status

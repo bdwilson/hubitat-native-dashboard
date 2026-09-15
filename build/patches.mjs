@@ -90,7 +90,17 @@ const HND_LOCAL_ONLY = (function () {
   if (q === '1') return true;
   if (q === '0') return false;
   try { return localStorage.getItem(HND_MODE_KEY) === 'local'; } catch (e) { return false; }
-})();`,
+})();
+// hubitat-native-dashboard: upstream decides "can this setup use the
+// eventsocket?" from cfg.hubIsCloud — the hub URL typed into settings. On this
+// build that is the wrong question, and worse, it is not always answerable:
+// local-only mode never loads the hub's config, so cfg.hubIsCloud keeps its
+// upstream default of TRUE and every check against it reads backwards.
+//
+// What decides it here is how the BROWSER reached this page. Over the cloud
+// link there is no eventsocket to reach; over the local link there is,
+// whatever settings say. Declared once, used by every patched site.
+const HND_VIA_CLOUD = location.hostname.includes('cloud.hubitat.com');`,
   },
 
   {
@@ -206,9 +216,115 @@ const HND_LOCAL_ONLY = (function () {
       'no eventsocket to reach, over the local link there is, regardless of config.',
     count: 1,
     find: 'if (cfg.hubIsCloud) { startPolling(); return; }',
-    replace: "if (location.hostname.includes('cloud.hubitat.com')) { startPolling(); return; }",
+    replace: 'if (HND_VIA_CLOUD) { startPolling(); return; }',
+  },
+
+  {
+    name: 'polltick-reconnect-guard',
+    why:
+      'Same cloud-vs-local question as websocket-cloud-guard, second site — added ' +
+      "upstream by PR #46 (pollTick's reconnect for a socket that died without " +
+      'closing). Left unpatched it reads cfg.hubIsCloud, which in local-only mode ' +
+      'is never loaded from the hub and so keeps its default of true: the socket ' +
+      'connects once at boot and, if it drops, is never retried for the rest of ' +
+      'the session. Polling still runs at full rate, so the dashboard degrades to ' +
+      'poll-only rather than freezing — but push never comes back.',
+    count: 1,
+    find: 'if (!ws && !cfg.hubIsCloud && Date.now() - lastWsAttemptAt >= WS_RECONNECT_MS) {',
+    replace: 'if (!ws && !HND_VIA_CLOUD && Date.now() - lastWsAttemptAt >= WS_RECONNECT_MS) {',
+  },
+
+  {
+    name: 'ws-dot-transport-label',
+    why:
+      'Third cfg.hubIsCloud site, also from PR #46: the ws-dot tooltip that reports ' +
+      'which transport is actually in use. Upstream added it precisely so a stale ' +
+      'dashboard could be diagnosed by hovering instead of opening a console, so a ' +
+      'wrong answer here is worse than none — in local-only mode it would claim ' +
+      '"cloud — no WebSocket" on a local link that has a perfectly good socket.',
+    count: 1,
+    find:
+      "const mode = wsIsLive() ? 'WebSocket (live)' : (cfg.hubIsCloud ? 'Polling (cloud — no WebSocket)' : 'Polling');",
+    replace:
+      "const mode = wsIsLive() ? 'WebSocket (live)' : (HND_VIA_CLOUD ? 'Polling (cloud — no WebSocket)' : 'Polling');",
   },
 ];
+
+/**
+ * Guards: upstream constructs this build has deliberately diverged from, pinned
+ * by count.
+ *
+ * PATCHES catch SYNTACTIC drift — upstream renames a helper or reflows a line,
+ * the pattern stops matching, the build fails. What they structurally cannot
+ * catch is SEMANTIC drift: upstream adding NEW code that should have been
+ * patched but wasn't. Nothing asserts on text no patch mentions, so the build
+ * goes green and the divergence ships.
+ *
+ * That is not hypothetical. cf-hubitat-dashboard PR #46 added two new
+ * cfg.hubIsCloud sites — both encoding the very predicate websocket-cloud-guard
+ * exists to reject — and this build stayed green through it. The
+ * polltick-reconnect-guard and ws-dot-transport-label patches above are the
+ * cleanup; these guards are so the next one fails the build instead.
+ *
+ * Counted against the RAW upstream source, before any patch runs, so the
+ * expected number describes upstream and does not shift as patches are added.
+ *
+ * When one trips, the fix is a decision, not a number bump: look at the new
+ * site and either patch it or satisfy yourself that upstream's behaviour is
+ * correct here too — then update `expect` with a note saying which.
+ */
+export const GUARDS = [
+  {
+    name: 'hub-is-cloud-sites',
+    pattern: 'cfg.hubIsCloud',
+    expect: 11,
+    why:
+      'This build answers cloud-vs-local from location.hostname (HND_VIA_CLOUD), ' +
+      'not from the configured hub URL. Every upstream site has to be reviewed: ' +
+      'settings-form plumbing is fine as-is, anything gating the eventsocket or ' +
+      'reporting transport is not.',
+  },
+  {
+    name: 'direct-fetch-calls',
+    pattern: 'fetch(',
+    expect: 5,
+    why:
+      'Calls that bypass api()/fetchConfigFromWorker() and hit a URL directly. ' +
+      'Each one needs its own patch to reach an app route and carry the OAuth ' +
+      'token — a new unpatched one is a call that 404s on the hub.',
+  },
+  {
+    name: 'local-storage-sites',
+    pattern: 'localStorage',
+    expect: 3,
+    why:
+      'local-only mode depends on knowing every place the layout cache is read or ' +
+      'written. A new site upstream could read hub config in local mode or write ' +
+      'to a key copyHubConfigToLocal() does not seed.',
+  },
+];
+
+/**
+ * Check every guard against the raw upstream source. Throws on the first
+ * mismatch, naming the guard, both counts and what the divergence is about.
+ */
+export function checkGuards(source) {
+  const checked = [];
+  for (const g of GUARDS) {
+    const hits = source.split(g.pattern).length - 1;
+    if (hits !== g.expect) {
+      throw new Error(
+        `guard "${g.name}": found ${hits} occurrence(s) of ${JSON.stringify(g.pattern)}, expected ${g.expect}.\n` +
+          `  Why this is guarded: ${g.why}\n` +
+          `  cf-hubitat-dashboard has ${hits > g.expect ? 'ADDED' : 'REMOVED'} a site this build cares about.\n` +
+          `  Review it, patch it if it needs patching, then update GUARDS in\n` +
+          `  build/patches.mjs with the new count and a note on what was decided.`,
+      );
+    }
+    checked.push({ name: g.name, hits });
+  }
+  return checked;
+}
 
 /**
  * Cosmetic relabels: user-visible wording that names Cloudflare/KV, which do not
