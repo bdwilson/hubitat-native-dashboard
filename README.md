@@ -87,9 +87,16 @@ Two things worth knowing:
 
 It commits `dist/` rather than uploading an artifact because the app's **Install / update dashboard UI** button fetches those files from this repo — as artifacts they'd be unreachable from a hub.
 
-The nightly run earns its keep twice over. The frontend is read from `cf-hubitat-dashboard` at build time rather than vendored, so it picks up upstream changes automatically — and because the build asserts every transport patch matches **exactly once**, a restructured upstream fails the run and names the patch that stopped matching, instead of that surfacing as a broken dashboard on a hub.
+**The nightly run is how this project stays in sync with the Cloudflare dashboard.** The frontend is read from `cf-hubitat-dashboard` at build time rather than vendored — there is no copy of it in this repo — so upstream feature work lands here automatically, without anyone porting it.
 
-The build is reproducible: rebuilding unchanged inputs produces byte-identical output (`builtAt` is reused when the build id is unchanged, and no local source path is recorded), so CI only commits when something genuinely changed. A local build and a CI build of the same inputs are identical. CI also compiles the app with `check-groovy.groovy` and fails before building if it won't compile.
+Four gates make the run fail loudly rather than ship something subtly wrong:
+
+1. **The app must compile** — `check-groovy.groovy` at `CLASS_GENERATION`, the phase that catches what the hub's editor rejects on Save.
+2. **`importUrl` must match its branch** — `check-import-url.mjs`; see [the importUrl rule](CLAUDE.md).
+3. **Every transport patch must match exactly** — a restructured upstream fails the run and names the patch that stopped matching.
+4. **Guard counts must hold, and no chunk may outgrow its ceiling** — guards catch upstream *adding* something this build diverges from, which patch assertions structurally cannot see.
+
+The build is reproducible: rebuilding unchanged inputs produces byte-identical output (`builtAt` is reused when the build id is unchanged, and no local source path is recorded), so CI only commits when something genuinely changed. A local build and a CI build of the same inputs are identical.
 
 ## Version tracking
 

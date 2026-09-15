@@ -12,7 +12,7 @@
       "id": "20ba4d1c-f8f6-4eb1-b546-1ce5e9eb8b39",
       "name": "Hubitat Native Dashboard",
       "namespace": "bdwilson",
-      "location": "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/claude/guard-upstream-drift/app/HubitatNativeDashboard.groovy",
+      "location": "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/main/app/HubitatNativeDashboard.groovy",
       "required": true,
       "oauth": true,
       "version": "1.0.0"
