@@ -1,7 +1,7 @@
 {
-  "version": "19e8e8b1a0",
+  "version": "aed385997e",
   "upstreamSha256": "bcaa156b72e8",
-  "builtAt": "2026-09-14T19:08:41.963Z",
+  "builtAt": "2026-09-15T02:41:41.220Z",
   "shell": "hnd-shell.html",
   "chunks": [
     "hnd-app-1.js",
@@ -14,6 +14,7 @@
     "api-hub-const",
     "config-include-secrets-separator",
     "local-only-mode-flag",
+    "config-epoch-clears-stale-cache",
     "local-only-skips-config-read",
     "local-only-skips-config-write",
     "local-only-reset-spares-hub-config",
@@ -27,8 +28,8 @@
   "relabels": 17,
   "bytes": {
     "hnd-shell.html": 66790,
-    "hnd-app-1.js": 98282,
-    "hnd-app-2.js": 98225,
-    "hnd-app-3.js": 33567
+    "hnd-app-1.js": 98278,
+    "hnd-app-2.js": 98300,
+    "hnd-app-3.js": 35401
   }
 }

@@ -192,6 +192,7 @@ The Hub Connection credential inputs are **hidden at runtime by the loader, not 
 | Device access | `/api/hub/<sub-path>` | `hub?path=<url-encoded sub-path>` |
 | Event socket | Worker proxies `/api/hub/events` | browser hits `ws://<hub>/eventsocket` directly |
 | Cloud detection | configured hub URL | `location.hostname` — how the *browser* reached the page |
+| Wiping config | only from inside the dashboard | also from the app page, via `configEpoch` (below) |
 | PWA manifest/icons | Worker static assets | stripped (no asset origin; cloud corrupts binaries) |
 
 One patch, `import-syncs-all-settings-inputs`, is **not** a transport change — it fixes a real upstream bug. `applyImportedConfig()` syncs only some settings inputs back to the form, so `readSettingsForm()` on the next save reverts title, poll interval, grid columns, tile height and icon scale to their pre-import values. This breaks restore on the Cloudflare build too. The proper fix belongs upstream; if it lands there, this patch will stop matching and the build will say so.
@@ -199,6 +200,32 @@ One patch, `import-syncs-all-settings-inputs`, is **not** a transport change —
 Sub-paths go in a query param because Hubitat's colon-style path-variable mapping syntax has no verified precedent in shipped code.
 
 **If a patch stops matching**, upstream changed. Go read the relevant code in cf-hubitat-dashboard and update the patch — do not loosen it into a regex that "probably still works."
+
+### `configEpoch` — why wiping config needs a version number
+
+This build has something the Cloudflare one doesn't: a **"Wipe stored dashboard config" toggle on the app page**, i.e. a reset the browser never initiated. That turned out to be only *half* a reset, in the worst possible way.
+
+`applyServerConfig()` upstream deliberately ignores empty values from the server — "preserve in-memory if server is empty" — which is exactly what makes browser-only mode work. So after `state.remove("configJson")`, the next page load did this:
+
+| Actually reset | Came straight back from `localStorage` |
+|---|---|
+| Title, poll interval, main slots | Custom dashboards |
+| | Hidden devices, kind overrides |
+| | Nav visibility and order |
+| | Status-bar presence chips |
+
+A partial reset — worse than either a full one or none — and the next save pushed the survivors back onto the hub.
+
+The app can't reach `localStorage`, so it needs to *tell* the browser. `state.configEpoch` is seeded at install and bumped by `bumpConfigEpoch()` on every wipe; `getConfig` always returns it. The `config-epoch-clears-stale-cache` patch compares it against `hnd-config-epoch` in `localStorage` and, when it moves, drops the layout cache and reloads.
+
+Four things about that design are deliberate:
+
+- **It reloads rather than resetting each variable in place.** `boot()` already does the right thing with no cache; enumerating every piece of in-memory state here would silently rot the next time one is added.
+- **The epoch is written before the reload**, and in its own key (not the layout cache — the point is to survive clearing that). The fresh load sees them equal, so it cannot loop.
+- **First sight is not a wipe.** A browser with no recorded epoch adopts the current one silently. This is also why the epoch is seeded at install and always sent, rather than only existing after a wipe — otherwise the very first wipe would be read as a first sight and ignored.
+- **`deleteConfig` bumps it too**, so the dashboard's own Reset Everything propagates to *other* browsers, which otherwise sat on the old layout and pushed it back on their next save.
+
+**Local-only mode is untouched by all of this**, and that's correct, not an oversight: `fetchConfigFromWorker` throws before `applyServerConfig` runs, so those browsers never see the epoch. Local mode promises the hub's config is neither read nor written, and a hub-side wipe has no business clearing a layout the hub never held.
 
 ## The automated build — what runs, when, and why
 

@@ -370,11 +370,45 @@ def initialize() {
             log.error "Could not create an OAuth token — click 'OAuth' in Apps Code and enable it for this app, then Save and reinstall. ${e.message}"
         }
     }
+    // Every install carries a config epoch, bumped whenever the stored config is
+    // wiped. Browsers compare it against the last one they saw and clear their
+    // own cached copy when it moves — see bumpConfigEpoch() for why that is
+    // needed at all. Seeded here (not only on wipe) so an existing install
+    // upgrading to this version adopts the current epoch quietly instead of
+    // reading the first wipe's epoch as "nothing to compare against".
+    if (!state.configEpoch) state.configEpoch = now()
+
     if (settings?.resetConfig) {
         state.remove("configJson")
+        bumpConfigEpoch()
         app.updateSetting("resetConfig", [value: "false", type: "bool"])
-        log.warn "Dashboard config wiped by request. Maker API credentials kept."
+        log.warn "Dashboard config wiped by request. Maker API credentials kept. " +
+                 "Each browser clears its own cached copy the next time it loads."
     }
+}
+
+/**
+ * Mark the stored config as wiped.
+ *
+ * Wiping state.configJson is only half a reset. Every browser keeps a full copy
+ * of the layout in localStorage, and the frontend deliberately ignores empty
+ * values from the server ("preserve in-memory if server is empty" — that is what
+ * lets browser-only mode work at all). So a hub-side wipe used to be invisible:
+ * title, poll interval and the main slots reset, while custom dashboards, hidden
+ * devices, kind overrides, nav visibility/order and status-bar presence chips all
+ * came straight back from the browser's cache. A partial reset, which is worse
+ * than either a full one or none.
+ *
+ * The epoch closes that. It is served with the config; a browser that sees one
+ * newer than the last it recorded drops its cache and reloads.
+ *
+ * Note this deliberately does NOT reach browsers in local-only mode (?local=1):
+ * those never read the hub's config at all, so they never see the epoch. That is
+ * the promise local mode makes — the hub's config is neither read nor written —
+ * and a hub-side wipe has no business clearing a layout the hub never held.
+ */
+private void bumpConfigEpoch() {
+    state.configEpoch = now()
 }
 
 // ---------------------------------------------------------------------------
@@ -538,8 +572,12 @@ def getConfig() {
     }
 
     def out = [
-        hub      : hub,
-        dashboard: cfg.dashboard ?: defaultDashboard(),
+        hub        : hub,
+        dashboard  : cfg.dashboard ?: defaultDashboard(),
+        // Bumped on every wipe. The frontend drops its cached layout when this
+        // moves — see bumpConfigEpoch(). Always sent, so a browser's first sight
+        // of it is recorded rather than mistaken for a wipe.
+        configEpoch: state.configEpoch ?: 0,
     ]
     if (cfg.dynamic != null)                  out.dynamic = cfg.dynamic
     if (cfg.custom != null)                   out.custom = cfg.custom
@@ -602,6 +640,12 @@ def putConfig() {
 
 def deleteConfig() {
     state.remove("configJson")
+    // The dashboard's own "Reset Everything" lands here. The browser that
+    // pressed it clears itself directly, but every OTHER browser is still
+    // holding the old layout in localStorage and would push it back to the hub
+    // on its next save. Bumping here makes one reset mean the same thing
+    // everywhere, which is what "Reset Everything" says on the button.
+    bumpConfigEpoch()
     render contentType: "application/json", data: '{"ok":true}', status: 200, headers: noStoreHeaders()
 }
 

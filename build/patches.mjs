@@ -85,6 +85,9 @@ export const PATCHES = [
 // ?local=0 force it for one load regardless, so a link can be handed to someone
 // without changing what their browser remembers.
 const HND_MODE_KEY = 'hnd-config-mode';
+// Last config epoch this browser saw from the hub. Kept in its OWN key, not in
+// the layout cache, because the whole point is to survive clearing that cache.
+const HND_EPOCH_KEY = 'hnd-config-epoch';
 const HND_LOCAL_ONLY = (function () {
   var q = new URLSearchParams(location.search).get('local');
   if (q === '1') return true;
@@ -100,7 +103,57 @@ const HND_LOCAL_ONLY = (function () {
 // What decides it here is how the BROWSER reached this page. Over the cloud
 // link there is no eventsocket to reach; over the local link there is,
 // whatever settings say. Declared once, used by every patched site.
-const HND_VIA_CLOUD = location.hostname.includes('cloud.hubitat.com');`,
+const HND_VIA_CLOUD = location.hostname.includes('cloud.hubitat.com');
+
+// Did the hub's config get wiped since this browser last looked? Returns true
+// if so, having started a reload — the caller must stop what it was doing.
+//
+// Wiping the hub's copy is only half a reset: this browser holds a full layout
+// in localStorage, and applyServerConfig() deliberately ignores empty values
+// from the server (that is what makes browser-only mode work). So without this,
+// a hub-side wipe reset the title, poll interval and main slots while custom
+// dashboards, hidden devices, kind overrides, nav order and status-bar chips all
+// came back from cache — a partial reset, worse than either extreme.
+//
+// Reloading rather than resetting each variable in place is deliberate: boot()
+// already does exactly the right thing with no cache, and enumerating every
+// piece of in-memory state here would silently rot the next time one is added.
+// The epoch is written BEFORE the reload, so the fresh load sees them equal and
+// cannot loop.
+function hndConfigWasWiped(serverCfg) {
+  const epoch = serverCfg && serverCfg.configEpoch;
+  if (!epoch) return false;
+  let seen = null;
+  try { seen = localStorage.getItem(HND_EPOCH_KEY); } catch (e) { return false; }
+  if (seen === String(epoch)) return false;
+  try { localStorage.setItem(HND_EPOCH_KEY, String(epoch)); } catch (e) {}
+  // First sight is not a wipe — this browser has simply never recorded one.
+  if (seen === null) return false;
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  console.warn('Dashboard config was wiped on the hub — clearing this browser\\'s cached layout.');
+  location.reload();
+  return true;
+}`,
+  },
+
+  {
+    name: 'config-epoch-clears-stale-cache',
+    why:
+      'Makes a hub-side wipe actually reach browsers. Without it, wiping config ' +
+      'from the app page is a PARTIAL reset — title, pollSec and main slots come ' +
+      'back as defaults, while custom dashboards, hidden devices, overrides, nav ' +
+      'visibility/order and status-bar chips are restored from localStorage, and ' +
+      'the next save pushes all of it back onto the hub. Placed at the top of ' +
+      'applyServerConfig() because that is the one funnel every server config ' +
+      'passes through, on boot and after any refetch. Local-only mode never ' +
+      'reaches here (fetchConfigFromWorker throws first), which is correct: it ' +
+      'promises the hub config is neither read nor written.',
+    count: 1,
+    find: `function applyServerConfig(serverCfg) {
+  if (!serverCfg) return;`,
+    replace: `function applyServerConfig(serverCfg) {
+  if (!serverCfg) return;
+  if (hndConfigWasWiped(serverCfg)) return; // reloading; nothing else is valid`,
   },
 
   {

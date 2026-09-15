@@ -1,3 +1,52 @@
+      default: openTileEditor(slotId); return;
+    }
+    setTimeout(refreshAll, 400);
+  } catch (err) {
+    console.error('Command failed', err);
+    // A failed command may leave the optimistic tile update above showing the
+    // wrong state — resync from the hub rather than leaving it stuck wrong.
+    // Do this before flashErr: flashErr touches the tile element and must
+    // never be allowed to throw and skip the resync.
+    setTimeout(refreshAll, 400);
+    flashErr(tileEl);
+  }
+}
+
+function flashErr(tile) {
+  const orig = tile.style.outline;
+  tile.style.outline = '2px solid var(--alert)';
+  setTimeout(() => { tile.style.outline = orig; }, 600);
+}
+
+// Momentary tiles have no persistent attribute to reflect — this is the only
+// feedback that a tap actually registered, so it needs to be immediate and
+// not depend on any network round-trip.
+function flashPressed(tile) {
+  const orig = tile.style.outline;
+  tile.style.outline = '2px solid var(--info)';
+  setTimeout(() => { tile.style.outline = orig; }, 300);
+}
+
+// ── Confirmation modal ────────────────────────────────────────────────────────
+
+let confirmResolve = null;
+const confirmModal = document.getElementById('confirm-modal');
+
+function showConfirm(message) {
+  return new Promise(resolve => {
+    confirmResolve = resolve;
+    document.getElementById('confirm-title').textContent = 'Confirm';
+    document.getElementById('confirm-body').textContent = message;
+    confirmModal.classList.add('open');
+  });
+}
+
+document.getElementById('confirm-yes').addEventListener('click', () => {
+  confirmModal.classList.remove('open');
+  if (confirmResolve) { confirmResolve(true); confirmResolve = null; }
+});
+document.getElementById('confirm-no').addEventListener('click', () => {
+  confirmModal.classList.remove('open');
   if (confirmResolve) { confirmResolve(false); confirmResolve = null; }
 });
 
@@ -2173,55 +2222,3 @@ function connectWebSocket() {
     // dashboard then freezes until a manual pull-to-refresh, which is exactly
     // the "locks/presence don't update until I refresh" symptom. The poll
     // keeps running at full rate underneath; the socket just makes updates
-    // land sooner than the next tick.
-    updateWsDotTitle();
-  });
-
-  ws.addEventListener('message', e => {
-    lastWsEventAt = Date.now();
-    try {
-      const evt = JSON.parse(e.data);
-      handleHubEvent(evt);
-    } catch {}
-  });
-
-  ws.addEventListener('close', e => {
-    const reason = e.reason ? ` — ${e.reason}` : '';
-    console.warn(`Hub WebSocket closed (code ${e.code})${reason} — falling back to polling`);
-    ws = null;
-    setWsDot(false);
-    startPolling(); // back to the fast cadence now that push is gone
-    // Try to reconnect after 30s
-    if (wsReconnTimer) clearTimeout(wsReconnTimer);
-    wsReconnTimer = setTimeout(() => {
-      if (!ws) connectWebSocket();
-    }, 30000);
-  });
-
-  ws.addEventListener('error', e => {
-    console.warn('Hub WebSocket error:', e);
-  });
-}
-
-function setWsDot(live) {
-  document.getElementById('ws-dot').classList.toggle('live', !!live);
-  updateWsDotTitle();
-}
-
-// The dot alone can't distinguish "socket open and delivering" from "socket
-// open but silently dead" — the failure mode this whole path guards against.
-// Put the real state in the tooltip so a stale dashboard can be diagnosed by
-// hovering/long-pressing instead of opening a console.
-function updateWsDotTitle() {
-  const el = document.getElementById('ws-dot');
-  if (!el) return;
-  const ago = ms => {
-    if (!ms) return 'never';
-    const s = Math.round((Date.now() - ms) / 1000);
-    if (s < 60) return `${s}s ago`;
-    const m = Math.floor(s / 60);
-    return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`;
-  };
-  const mode = wsIsLive() ? 'WebSocket (live)' : (HND_VIA_CLOUD ? 'Polling (cloud — no WebSocket)' : 'Polling');
-  const every = currentPollMs ? `${Math.round(currentPollMs / 1000)}s` : 'off';
-  el.title = `${mode}\nPolling every ${every}\nLast data: ${ago(lastDataAt)}` +

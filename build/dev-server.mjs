@@ -71,6 +71,13 @@ const FAKE_DEVICES = [
 /** In-memory stand-in for the app's `state.configJson`. */
 let storedConfig = null;
 
+/**
+ * Stand-in for the app's `state.configEpoch`. Bumped whenever the stored config
+ * is wiped; the frontend drops its cached layout when it sees this move.
+ * Mirrored here so the dev server stays faithful to that behaviour.
+ */
+let configEpoch = Date.now();
+
 function defaultDashboard() {
   return { title: 'Home', pollSec: 5, slots: {} };
 }
@@ -205,7 +212,7 @@ const server = createServer(async (req, res) => {
       const hub = { baseUrl: 'http://127.0.0.1', appId: APP_ID, isCloud: false };
       if (includeSecrets) hub.token = 'fake-maker-token';
       else hub.hasToken = true;
-      const out = { hub, dashboard: cfg.dashboard || defaultDashboard() };
+      const out = { hub, dashboard: cfg.dashboard || defaultDashboard(), configEpoch };
       for (const k of ['dynamic', 'custom', 'dashboardsVisible', 'dashboardsOrder', 'statusBarPresenceDevices']) {
         if (cfg[k] != null) out[k] = cfg[k];
       }
@@ -243,6 +250,8 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'DELETE') {
       storedConfig = null;
+      configEpoch = Date.now();
+      console.log(`  [config] wiped; epoch -> ${configEpoch}`);
       return json(res, { ok: true });
     }
     return json(res, { error: 'method not allowed' }, 405);
