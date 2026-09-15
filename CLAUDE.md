@@ -273,18 +273,28 @@ The HPM package ships **the app only**. That is the whole reason a frontend chan
 
 Adopted from **bdwilson/hubitat**'s CLAUDE.md, restated for this repo (default branch `main`, not `master`). It is a **standing rule, active on every commit** — not something to fix just before a release.
 
-> Reading a `.groovy` file's `importUrl` must tell you exactly which branch that file currently lives on — never early, never stale, never a leftover from a previous branch.
+> Reading a branch-pinned URL must tell you exactly which branch the thing it points at currently lives on — never early, never stale, never a leftover from a previous branch.
 
 Concretely:
 
-- **On `main`**: `importUrl` points at `main`. This is the guarantee that matters — whatever merges is immediately re-importable by every user who installed via Import or HPM, because the URL they already hold resolves to the code that just landed.
+- **On `main`**: point at `main`. This is the guarantee that matters — whatever merges is immediately re-importable by every user who installed via Import or HPM, *and* the running app fetches UI files that actually exist.
 - **On a feature branch**: point at *that same branch* from the first commit that adds or touches the file, even if release is imminent.
 - **In the PR that merges to `main`**: flip to `main`. This happens exactly once, inside the merging PR — never as its own earlier commit.
 - **Pointing at any other branch is always wrong.**
 
-`packageManifest.json`'s `apps[].location` follows the identical rule, because HPM resolves it at install and update time. A stale location is the same bug wearing different clothes.
+**The rule covers every self-referencing raw URL, not just `importUrl`.** There are three today, and they fail differently:
 
-**This is enforced, not remembered.** `build/check-import-url.mjs` runs in CI and fails the build otherwise. It exists because `importUrl` sat on `claude/modifier-syntax-error-188-lkzmfi` for months after that branch merged — so anyone hitting Import re-fetched a dead branch instead of current code, and nothing anywhere said so. Run it locally with `node build/check-import-url.mjs`.
+| Site | Who resolves it | What a stale one does |
+|---|---|---|
+| `importUrl` in `definition()` | Apps Code **Import** | Re-imports a dead branch instead of current code |
+| `apps[].location` in `packageManifest.json` | HPM, at install *and* update | Installs/updates from a dead branch |
+| `defaultUiSourceUrl()` | **The running app**, on "Install / update dashboard UI" | Writes stale UI chunks into File Manager, indefinitely |
+
+The third has the largest blast radius and is the easiest to forget, because it's the only one that isn't about installing the app.
+
+**This is enforced, not remembered.** `build/check-import-url.mjs` runs in CI and fails the build otherwise. Run it locally with `node build/check-import-url.mjs`.
+
+**It scans rather than checking a list, and that distinction is load-bearing.** The first version of the checker validated the two sites its author had in mind — `importUrl` and `packageManifest.json` — and passed green while `defaultUiSourceUrl()` still pointed at `claude/modifier-syntax-error-188-lkzmfi`, months after that branch merged. Enumerating known sites cannot catch an unknown one; it is exactly the lesson `GUARDS` encode for upstream drift, repeated inside this repo. So the checker walks every tracked file, matches every URL into this repo, and validates all of them by prefix. **A fourth pinned URL needs no registration anywhere** — and don't "simplify" the scan back into a list.
 
 When releasing, also follow bdwilson/hubitat's other two release steps: bump `version`/`dateReleased`/`releaseNotes` in `packageManifest.json` (**never** change an app entry's `id` — HPM tracks the package by it), and add an entry to that repo's root `repository.json` if this package isn't listed yet.
 
@@ -310,7 +320,7 @@ build/
   patches.mjs          — asserted transport PATCHES, count-pinned GUARDS, best-effort RELABELS
   dev-server.mjs       — local stand-in for the app; simulation, not the real thing
   check-groovy.groovy  — compile the app without a hub
-  check-import-url.mjs — enforce the importUrl rule (CI gate)
+  check-import-url.mjs — scan every tracked file for stale branch-pinned URLs (CI gate)
 packageManifest.json   — HPM package: the app's Groovy only, with oauth enablement
 dist/                  — COMMITTED build output: the UI chunks the app self-installs from
 ```

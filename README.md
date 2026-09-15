@@ -92,7 +92,7 @@ It commits `dist/` rather than uploading an artifact because the app's **Install
 Four gates make the run fail loudly rather than ship something subtly wrong:
 
 1. **The app must compile** — `check-groovy.groovy` at `CLASS_GENERATION`, the phase that catches what the hub's editor rejects on Save.
-2. **`importUrl` must match its branch** — `check-import-url.mjs`; see [the importUrl rule](CLAUDE.md).
+2. **Every branch-pinned URL must match its branch** — `check-import-url.mjs`; see [the importUrl rule](CLAUDE.md). Covers `importUrl`, the HPM manifest, and the URL the app fetches its UI from.
 3. **Every transport patch must match exactly** — a restructured upstream fails the run and names the patch that stopped matching.
 4. **Guard counts must hold, and no chunk may outgrow its ceiling** — guards catch upstream *adding* something this build diverges from, which patch assertions structurally cannot see.
 

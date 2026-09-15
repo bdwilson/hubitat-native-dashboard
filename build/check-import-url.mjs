@@ -1,33 +1,36 @@
 #!/usr/bin/env node
 /**
- * Enforce the importUrl convention borrowed from bdwilson/hubitat.
+ * Enforce the importUrl convention borrowed from bdwilson/hubitat, across
+ * EVERY self-referencing raw URL in the repo.
  *
  *   node build/check-import-url.mjs
  *
  * The rule there, restated for this repo (whose default branch is `main`,
  * not `master`):
  *
- *   Reading a .groovy file's importUrl must tell you exactly which branch that
- *   file currently lives on — never early, never stale, never a leftover from a
- *   previous branch.
+ *   Reading a branch-pinned URL must tell you exactly which branch the thing it
+ *   points at currently lives on — never early, never stale, never a leftover
+ *   from a previous branch.
  *
  * So:
- *   - On `main`, importUrl MUST point at `main`. This is the guarantee that
+ *   - On `main`, these MUST point at `main`. This is the guarantee that
  *     matters: whatever is merged is immediately re-importable by every user
- *     who installed via Import or HPM, because the URL they already have
- *     resolves to the code that just landed.
- *   - On a feature branch, importUrl must point at EITHER that same branch
- *     (normal development) OR `main` (the release flip, done inside the PR that
- *     merges the branch — per bdwilson/hubitat, that flip happens exactly once,
- *     as part of the merging PR, never as its own earlier commit).
- *   - Pointing at any OTHER branch is always wrong. That is the failure this
- *     check exists for: importUrl sat on `claude/modifier-syntax-error-188-lkzmfi`
- *     for months after that branch merged, so anyone hitting Import re-fetched
- *     a dead branch instead of current code, and nothing anywhere said so.
+ *     who installed via Import or HPM, and the running app fetches UI files
+ *     that actually exist.
+ *   - On a feature branch, they must point at EITHER that same branch (normal
+ *     development) OR `main` (the release flip, done inside the PR that merges
+ *     the branch — per bdwilson/hubitat, exactly once, never as an earlier
+ *     standalone commit).
+ *   - Pointing at any OTHER branch is always wrong.
  *
- * packageManifest.json's `apps[].location` is held to the same rule, because
- * HPM resolves it at install and update time — a stale location is the same
- * bug wearing different clothes.
+ * WHY THIS SCANS RATHER THAN CHECKS A LIST. The first version of this file
+ * checked two known sites: the app's importUrl and packageManifest.json's
+ * location. It passed green while `defaultUiSourceUrl()` — the URL the running
+ * app fetches its UI files from, and so the one with the largest blast radius —
+ * still pointed at a branch that had merged months earlier. Enumerating known
+ * sites cannot catch an unknown one, which is the same lesson GUARDS encode for
+ * upstream drift. So: walk every tracked file, match every URL into this repo,
+ * and check them all. A fourth site cannot hide.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -37,13 +40,23 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_BRANCH = 'main';
-const RAW_PREFIX = 'https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/';
-const APP_PATH = 'app/HubitatNativeDashboard.groovy';
+const REPO_SLUG = 'bdwilson/hubitat-native-dashboard';
+const RAW_PREFIX = `https://raw.githubusercontent.com/${REPO_SLUG}/`;
+
+/**
+ * Matches a raw URL into this repo that actually pins something — the trailing
+ * `[^\s"'`),]+` requires at least one path character after the prefix, so the
+ * bare prefix constant in this very file is not itself flagged.
+ */
+const URL_RE = new RegExp(
+  `https://raw\\.githubusercontent\\.com/${REPO_SLUG.replace('/', '\\/')}/([^\\s"'\`),]+)`,
+  'g',
+);
 
 /**
  * The branch under test. GitHub Actions sets GITHUB_REF_NAME on a push (the
  * branch) and on a pull_request (the PR number, e.g. "42/merge" — not a branch,
- * so fall back to GITHUB_HEAD_REF which is the source branch). Locally, ask git.
+ * so prefer GITHUB_HEAD_REF, which is the source branch). Locally, ask git.
  */
 function currentBranch() {
   if (process.env.GITHUB_HEAD_REF) return process.env.GITHUB_HEAD_REF;
@@ -59,43 +72,23 @@ function currentBranch() {
 }
 
 /**
- * Pull the branch segment out of a raw.githubusercontent URL for this repo.
- * Accepts both spellings bdwilson/hubitat allows: `<branch>/<path>` and
- * `refs/heads/<branch>/<path>`. Branch names may contain slashes
- * (`claude/guard-upstream-drift`), so the branch is whatever precedes the known
- * file path rather than "the next segment".
+ * Allowed URL prefixes for a branch. Checking by PREFIX rather than parsing a
+ * branch out of the URL is deliberate: branch names contain slashes
+ * (`claude/guard-upstream-drift`) and the pinned path may be a file *or* a
+ * directory (`/dist`), so there is no unambiguous way to split one from the
+ * other. Prefix matching sidesteps that entirely.
  */
-function branchFromUrl(url, filePath) {
-  if (!url.startsWith(RAW_PREFIX)) return { error: `does not start with ${RAW_PREFIX}` };
-  let rest = url.slice(RAW_PREFIX.length);
-  if (rest.startsWith('refs/heads/')) rest = rest.slice('refs/heads/'.length);
-  if (!rest.endsWith(`/${filePath}`)) return { error: `does not end with /${filePath}` };
-  const branch = rest.slice(0, -`/${filePath}`.length);
-  if (!branch) return { error: 'has an empty branch segment' };
-  return { branch };
+function allowedPrefixes(branch) {
+  const forms = (b) => [`${RAW_PREFIX}${b}/`, `${RAW_PREFIX}refs/heads/${b}/`];
+  const out = forms(DEFAULT_BRANCH);
+  if (branch !== DEFAULT_BRANCH) out.unshift(...forms(branch));
+  return out;
 }
 
-function check(label, url, filePath, branch, problems) {
-  const { branch: urlBranch, error } = branchFromUrl(url, filePath);
-  if (error) {
-    problems.push(`${label}\n    ${url}\n    ${error}`);
-    return;
-  }
-  const ok = urlBranch === branch || urlBranch === DEFAULT_BRANCH;
-  if (!ok) {
-    const allowed =
-      branch === DEFAULT_BRANCH
-        ? `On ${DEFAULT_BRANCH}, the only allowed value is "${DEFAULT_BRANCH}".`
-        : `Allowed here: "${branch}" (development) or "${DEFAULT_BRANCH}" (release flip, in the merging PR).`;
-    problems.push(
-      `${label}\n` +
-        `    points at   : ${urlBranch}\n` +
-        `    but lives on: ${branch}\n` +
-        `    ${allowed}`,
-    );
-    return;
-  }
-  console.log(`  ok  ${label} -> ${urlBranch}`);
+function trackedFiles() {
+  return execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8' })
+    .split('\n')
+    .filter(Boolean);
 }
 
 async function main() {
@@ -104,36 +97,59 @@ async function main() {
     console.error('check-import-url: cannot determine the current branch; refusing to guess.');
     process.exit(1);
   }
+  const allowed = allowedPrefixes(branch);
   console.log(`check-import-url: branch "${branch}"`);
 
   const problems = [];
+  let found = 0;
 
-  const app = await readFile(path.join(REPO_ROOT, APP_PATH), 'utf8');
-  const m = app.match(/importUrl:\s*"([^"]+)"/);
-  if (!m) {
-    problems.push(`${APP_PATH}\n    no importUrl found in the definition() block`);
-  } else {
-    check(`${APP_PATH} importUrl`, m[1], APP_PATH, branch, problems);
+  for (const rel of trackedFiles()) {
+    let text;
+    try {
+      text = await readFile(path.join(REPO_ROOT, rel), 'utf8');
+    } catch {
+      continue; // unreadable or binary — nothing to pin in it
+    }
+    if (!text.includes(RAW_PREFIX)) continue;
+
+    text.split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(URL_RE)) {
+        const url = m[0];
+        found++;
+        if (allowed.some((p) => url.startsWith(p))) {
+          console.log(`  ok  ${rel}:${i + 1}`);
+        } else {
+          problems.push(`${rel}:${i + 1}\n    ${url}`);
+        }
+      }
+    });
   }
 
-  const manifest = JSON.parse(await readFile(path.join(REPO_ROOT, 'packageManifest.json'), 'utf8'));
-  for (const entry of manifest.apps ?? []) {
-    check(`packageManifest.json apps["${entry.name}"].location`, entry.location, APP_PATH, branch, problems);
+  if (!found) {
+    console.error(
+      'check-import-url: no self-referencing raw URLs found at all.\n' +
+        '  That is almost certainly a bug in this checker (a moved file, a changed\n' +
+        '  host), not a repo with nothing to check. Investigate before trusting it.',
+    );
+    process.exit(1);
   }
 
   if (problems.length) {
     const fix =
       branch === DEFAULT_BRANCH
-        ? `  Fix: point these at "${DEFAULT_BRANCH}".`
-        : `  Fix: point these at "${branch}", or at "${DEFAULT_BRANCH}" if this is the PR\n` +
+        ? `  On ${DEFAULT_BRANCH}, the only allowed branch is "${DEFAULT_BRANCH}".`
+        : `  Point these at "${branch}", or at "${DEFAULT_BRANCH}" if this is the PR\n` +
           `  that merges the branch.`;
     console.error(
-      `\ncheck-import-url FAILED:\n\n  ${problems.join('\n\n  ')}\n\n` +
-        `${fix}\n  See "The importUrl rule" in CLAUDE.md.\n`,
+      `\ncheck-import-url FAILED — ${problems.length} of ${found} URL(s) pin the wrong branch:\n\n` +
+        `  ${problems.join('\n\n  ')}\n\n${fix}\n` +
+        `  Allowed prefixes here:\n${allowed.map((p) => `    ${p}`).join('\n')}\n` +
+        `  See "The importUrl rule" in CLAUDE.md.\n`,
     );
     process.exit(1);
   }
-  console.log('check-import-url: OK');
+
+  console.log(`check-import-url: OK (${found} URL(s) checked)`);
 }
 
 main().catch((e) => {
