@@ -57,12 +57,13 @@ jobs:
       - name: Check the app compiles
         run: groovy build/check-groovy.groovy app/HubitatNativeDashboard.groovy
 
-      # importUrl and packageManifest.json's location must name the branch the
-      # file is actually on — or `main` when this is the PR that merges it.
-      # Both are re-fetched by users (Apps Code "Import", and HPM's update
-      # check), so a stale one silently serves a dead branch. See CLAUDE.md,
-      # "The importUrl rule".
-      - name: Check importUrl matches this branch
+      # Every self-referencing raw URL must name the branch it is actually on —
+      # or `main` when this is the PR that merges it. All three are re-fetched
+      # after the fact (Apps Code "Import", HPM's update check, and the running
+      # app's UI installer), so a stale one silently serves a dead branch. This
+      # SCANS every tracked file rather than checking a known list; see
+      # CLAUDE.md, "The importUrl rule", for why that matters.
+      - name: Check branch-pinned URLs
         run: node build/check-import-url.mjs
 
       # No --source: falls back to fetching cf-hubitat-dashboard's frontend from

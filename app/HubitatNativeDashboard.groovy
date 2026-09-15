@@ -755,7 +755,7 @@ private Boolean firmwareAtLeast(String wanted) {
 // ---------------------------------------------------------------------------
 
 private String defaultUiSourceUrl() {
-    "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/claude/modifier-syntax-error-188-lkzmfi/dist"
+    "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/main/dist"
 }
 
 private String uiSourceUrl() {
