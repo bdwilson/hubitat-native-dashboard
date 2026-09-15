@@ -234,10 +234,18 @@
   }
   .col { display: flex; flex-direction: column; gap: var(--gap); }
 
-  /* Dynamic / custom dashboard grid */
+  /* Dynamic / custom dashboard grid.
+     Uses --grid-cols like .section does, rather than the auto-fill it used to
+     use. Auto-fill made the "Grid columns" setting a no-op here — at 1280px it
+     produced nine ~130px tracks no matter what the setting said — and left the
+     real column count depending on window width, so a tile set to "2 columns"
+     covered a different fraction of the screen on every device. It also broke
+     drag-resize, which computed a column as offsetWidth/3.
+     minmax(0, 1fr) rather than 1fr so a long label cannot push a track wider
+     than its share. */
   .dyn-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    grid-template-columns: repeat(var(--grid-cols, 3), minmax(0, 1fr));
     grid-auto-rows: var(--row-h, 80px);
     grid-auto-flow: dense;
     gap: var(--gap); margin-bottom: var(--gap);
@@ -360,8 +368,14 @@
     border-bottom-right-radius: var(--radius);
     z-index: 2;
   }
-  body.edit-mode .tile .resize-handle { display: block; }
-  body.edit-mode .image-tile .resize-handle { display: block; z-index: 3; }
+  /* Only where a span can actually take effect: the .section grids and the
+     custom-dashboard grid. #right-col is flex and #cameras is flex until a wide
+     breakpoint, so a handle there is an affordance for something that cannot
+     happen — see bindResizeHandle(). */
+  body.edit-mode .section > .tile .resize-handle,
+  body.edit-mode #custom-grid > .tile .resize-handle { display: block; }
+  body.edit-mode .section > .image-tile .resize-handle,
+  body.edit-mode #custom-grid > .image-tile .resize-handle { display: block; z-index: 3; }
   /* Drag handle needs z-index + contrast inside image tiles */
   .image-tile .tile-drag-handle { z-index: 3; background: rgba(0,0,0,0.55); color: #ccc; border-radius: 2px; padding: 1px 3px; }
 
@@ -375,23 +389,41 @@
     cursor: default;
   }
 
-  /* Column/row span — section tiles use CSS-unit values (2× user columns) */
-  .section > [data-col="1"]  { grid-column: span 1; }  /* ½ user col  */
-  .section > [data-col="4"]  { grid-column: span 4; }  /* 2 user cols */
-  .section > [data-col="6"]  { grid-column: span 6; }  /* 3 user cols */
+  /* Column span — section tiles carry CSS-unit values (2× user columns).
+     Every value up to 12 is listed because "Grid columns" goes to 6, and a
+     span with no matching rule silently falls back to the 2-unit default —
+     which is how "Full row" used to do nothing above 3 columns. */
+  .section > [data-col="1"]  { grid-column: span 1; }   /* ½ user col */
+  .section > [data-col="3"]  { grid-column: span 3; }
+  .section > [data-col="4"]  { grid-column: span 4; }   /* 2 user cols */
+  .section > [data-col="5"]  { grid-column: span 5; }
+  .section > [data-col="6"]  { grid-column: span 6; }   /* 3 user cols */
+  .section > [data-col="7"]  { grid-column: span 7; }
+  .section > [data-col="8"]  { grid-column: span 8; }   /* 4 user cols */
+  .section > [data-col="9"]  { grid-column: span 9; }
+  .section > [data-col="10"] { grid-column: span 10; }  /* 5 user cols */
+  .section > [data-col="11"] { grid-column: span 11; }
+  .section > [data-col="12"] { grid-column: span 12; }  /* 6 user cols */
   /* Half-width tiles get smaller text so they don't overflow */
   .section > [data-col="1"] .tile-label { font-size: clamp(7px, calc(var(--row-h, 80px) * 0.13), 12px); }
   .section > [data-col="1"] .tile-value { font-size: clamp(8px, calc(var(--row-h, 80px) * 0.15), 13px); }
-  /* Custom/dynamic grids use 1:1 user-column spans */
+  /* Custom/dynamic grids use 1:1 user-column spans (no half track exists
+     there, so no "1" rule — see syncTileEditorVisibility). */
   #custom-grid > [data-col="2"] { grid-column: span 2; }
   #custom-grid > [data-col="3"] { grid-column: span 3; }
+  #custom-grid > [data-col="4"] { grid-column: span 4; }
+  #custom-grid > [data-col="5"] { grid-column: span 5; }
+  #custom-grid > [data-col="6"] { grid-column: span 6; }
   /* Row span — same semantics everywhere */
   .tile[data-row="2"],       .image-tile[data-row="2"]  { grid-row: span 2; }
   .tile[data-row="3"],       .image-tile[data-row="3"]  { grid-row: span 3; }
   .tile[data-row="4"],       .image-tile[data-row="4"]  { grid-row: span 4; }
-  /* Custom grid col span for image tiles */
-  #custom-grid > .image-tile[data-col="2"] { grid-column: span 2; }
-  #custom-grid > .image-tile[data-col="3"] { grid-column: span 3; }
+  /* A row-spanned image must let the grid decide its height. .image-tile
+     otherwise carries aspect-ratio: 16/9, which would fight grid-row and win,
+     making a 2- or 3-row image identical to a 1-row one. #custom-grid already
+     unsets it wholesale for the same reason. */
+  .section > .image-tile[data-row],
+  .col .image-tile[data-row] { aspect-ratio: unset; }
 
   /* Add-tile placeholder */
   .tile-add {
@@ -1181,7 +1213,7 @@
   <span id="lightbox-label"></span>
 </div>
 
-<!-- hnd-build: 19e8e8b1a0 -->
+<!-- hnd-build: f6508ff114 -->
 <style>#hub-id-row { display: none !important; }</style>
 <div id="hnd-boot" style="position:fixed;inset:0;z-index:99999;background:#0d1117;color:#e8e8ea;font:14px/1.5 -apple-system,system-ui,sans-serif;padding:24px;overflow:auto">
 <h2 style="margin:0 0 8px">Loading dashboard&hellip;</h2>
@@ -1191,7 +1223,7 @@
 (function () {
   'use strict';
   var PARTS = ["hnd-app-1.js","hnd-app-2.js","hnd-app-3.js"];
-  var VERSION = "19e8e8b1a0";
+  var VERSION = "f6508ff114";
   var token = new URLSearchParams(location.search).get('access_token') || '';
 
   function assetUrl(name) {

@@ -107,15 +107,17 @@ const DYNAMIC_GROUPS = [
 // ── Grid helpers ──────────────────────────────────────────────────────────────
 
 /**
- * Convert user-facing colSpan (0.5 | 1 | 2 | 3) to CSS grid span units.
+ * Convert user-facing colSpan (0.5 | 1 | 2 | 3 | …) to CSS grid span units.
  * The .section grid uses 2× the user column count internally, so:
- *   ½ col → span 1   |   1 col → span 2   |   2 cols → span 4   |   3 cols → span 6
+ *   ½ col → span 1   |   1 col → span 2   |   2 cols → span 4   |   N cols → span 2N
+ * Previously this hardcoded 0.5/2/3 and returned 2 for anything else, so a
+ * 4-, 5- or 6-column span silently rendered as one column.
  */
 function colToSpan(colSpan) {
   if (colSpan === 0.5) return 1;
-  if (colSpan === 2)   return 4;
-  if (colSpan === 3)   return 6;
-  return 2; // default: 1 user-column = 2 CSS units
+  const n = Number(colSpan);
+  if (!isFinite(n) || n < 1) return 2;
+  return Math.round(n) * 2;
 }
 
 /**
@@ -123,9 +125,30 @@ function colToSpan(colSpan) {
  */
 function spanToCol(cssSpan) {
   if (cssSpan === 1) return 0.5;
-  if (cssSpan === 4) return 2;
-  if (cssSpan === 6) return 3;
-  return 1;
+  const n = Number(cssSpan);
+  if (!isFinite(n) || n < 2) return 1;
+  return Math.round(n / 2);
+}
+
+/**
+ * How many columns a grid element actually has, read from the rendered grid.
+ *
+ * Deriving it rather than assuming is the point: the custom/dynamic resize
+ * handler used to compute a column as `offsetWidth / 3` while the grid was
+ * really `auto-fill minmax(130px, 1fr)` — nine tracks at 1280px, not three —
+ * so a drag needed about four times the expected travel and its snap points
+ * lined up with nothing. Reading the computed value cannot drift from the CSS.
+ */
+function gridColumnCount(gridEl, fallback) {
+  if (!gridEl) return fallback;
+  const cols = getComputedStyle(gridEl).gridTemplateColumns;
+  if (!cols || cols === 'none') return fallback;
+  // A display:none grid reports the SPECIFIED value rather than resolved track
+  // sizes — "repeat(6, minmax(0, 1fr))" would count as a couple of tokens and
+  // silently pass for a real column count. Only a resolved list is usable.
+  if (cols.includes('repeat(') || cols.includes('auto-fill') || cols.includes('auto-fit')) return fallback;
+  const n = cols.trim().split(/\s+/).length;
+  return n > 0 ? n : fallback;
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -779,6 +802,19 @@ window.addEventListener('hashchange', () => {
 
 // ── Nav chips ─────────────────────────────────────────────────────────────────
 
+// Does this auto-generated group currently match any device? Used to keep empty
+// groups out of the nav bar. Derived from `devices` on every render rather than
+// stored, so it self-corrects as devices are added or reclassified — note that
+// `devices` is empty until refreshDevices() returns, which is why boot() calls
+// updateNavChips() again afterwards.
+function dynamicGroupHasDevices(key) {
+  const group = DYNAMIC_GROUPS.find(g => g.key === key);
+  if (!group) return false;
+  // Not .some(group.match) — some() passes (value, index, array) and a stray
+  // index argument is exactly the kind of thing that silently changes a match.
+  return devices.some(d => group.match(d));
+}
+
 function updateNavChips() {
   const nav = document.getElementById('dash-nav');
   const chips = [];
@@ -791,12 +827,17 @@ function updateNavChips() {
       ({ key: 'custom/' + name, label: dash.title || name, kind: 'custom', viewPath: 'custom/' + name }))
   ];
 
-  // Initialize defaults if empty (first load).
-  // Dynamic dashboards are opt-in; main and custom dashboards start visible.
+  // Initialize defaults if empty (first load, or after Reset Everything).
+  // EVERYTHING starts visible, dynamic groups included. They used to default to
+  // hidden ("opt-in"), which meant a fresh or wiped config showed only Main and
+  // the "auto-generated dashboards" settings box came up unchecked — so the
+  // groups the dashboard generates for you were invisible until you went
+  // looking for a checkbox you had no reason to know existed. Empty groups are
+  // handled at render time below, not by hiding all of them up front.
   if (!dashboardsOrder.length) {
     dashboardsOrder = allDashboards.map(d => d.key);
     dashboardsVisible = {};
-    allDashboards.forEach(d => { dashboardsVisible[d.key] = d.kind !== 'dynamic'; });
+    allDashboards.forEach(d => { dashboardsVisible[d.key] = true; });
   }
 
   // Add new dashboards to the order list if they don't exist
@@ -812,6 +853,15 @@ function updateNavChips() {
     if (dashboardsVisible[key] === false) continue; // Skip hidden dashboards
     const dashboard = allDashboards.find(d => d.key === key);
     if (!dashboard) continue; // Skip if dashboard not found (e.g., deleted custom dashboard)
+
+    // A dynamic group with no matching devices would be a chip leading to an
+    // empty dashboard — "Shades" on a hub with no shades. Now that these
+    // default to visible, filter the empty ones HERE rather than persisting
+    // them as hidden: this is derived from the current device list, so a group
+    // appears by itself when a matching device shows up and never leaves a
+    // stale `false` in config that would keep it hidden afterwards. The
+    // Dashboard Manager still lists every group, so they stay toggleable.
+    if (dashboard.kind === 'dynamic' && !dynamicGroupHasDevices(key)) continue;
 
     const isActive = currentView === dashboard.viewPath;
     const cls = `nav-chip ${dashboard.kind}${isActive ? ' active' : ''}`;
@@ -881,7 +931,12 @@ function slotHtml(slotId, sectionId) {
 
   if (s.kind === 'image') {
     const orient = s.imageOrientation === 'portrait' ? ' portrait' : '';
-    return `<div class="image-tile${orient}" data-slot="${slotId}" data-section="${sectionId}"${colAttr}>
+    // rowAttr belongs here too. It was computed above and then only used by the
+    // regular-tile branch below, so an image tile's rowSpan was stored in config
+    // and never reached the DOM — a 3-row camera rendered identically to a
+    // 1-row one. The CSS has always had .image-tile[data-row=…] rules, and the
+    // custom-dashboard renderer has always emitted both attributes.
+    return `<div class="image-tile${orient}" data-slot="${slotId}" data-section="${sectionId}"${colAttr}${rowAttr}>
       <div class="image-empty">${escapeHtml(s.label || slotId)}</div>
       <span class="image-edit" data-edit="${slotId}">⋮</span>
       <div class="resize-handle" data-resize="${slotId}"></div>
@@ -957,10 +1012,20 @@ function renderTile(slotId, force) {
           const lbl = el.querySelector('.image-label');
           if (lbl) lbl.textContent = s.label || '';
         } else {
+          // The resize handle must be re-emitted here. slotHtml() puts one in
+          // the shell, but this innerHTML replaces the shell's children on the
+          // first render that has an image to show — so the handle vanished
+          // before the user ever saw it, and image tiles could not be resized
+          // at all even where the grid supports it.
           el.innerHTML = `
             <img src="${escapeHtml(busted)}" alt="">
             <span class="image-label">${escapeHtml(s.label || '')}</span>
-            <span class="image-edit" data-edit="${slotId}">⋮</span>`;
+            <span class="image-edit" data-edit="${slotId}">⋮</span>
+            <div class="resize-handle" data-resize="${slotId}"></div>`;
+          // Replacing innerHTML discarded the handle buildLayout() had bound,
+          // so the new one needs its listener. (bindResizeHandle no-ops outside
+          // a .section, which is what keeps camera tiles handle-free.)
+          bindResizeHandle(el, slotId);
         }
       }
       const imgEl = el.querySelector('img');
@@ -968,7 +1033,9 @@ function renderTile(slotId, force) {
     } else {
       el.innerHTML = `
         <div class="image-empty">${escapeHtml(s.label || slotId)} (unmapped)</div>
-        <span class="image-edit" data-edit="${slotId}">⋮</span>`;
+        <span class="image-edit" data-edit="${slotId}">⋮</span>
+        <div class="resize-handle" data-resize="${slotId}"></div>`;
+      bindResizeHandle(el, slotId);
     }
     return;
   }
@@ -1292,105 +1359,3 @@ async function onTileClick(e) {
       }
       case 'image': {
         // Tap → open lightbox with full-size image
-        const imgUrl = d ? getImageUrl(d) : s.url || '';
-        if (imgUrl) openLightbox(imgUrl, s.label || '', s.deviceId || null);
-        return;
-      }
-      case 'valve': {
-        if (!d) { openTileEditor(slotId); return; }
-        const v = getAttr(d, 'valve');
-        const isOpen = v === 'open';
-        console.log('Valve tile clicked:', { deviceId: s.deviceId, label: s.label, valveTimer: s.valveTimer, isOpen });
-        // If timer is enabled, show duration picker instead of direct toggle
-        if (s.valveTimer) {
-          console.log('Showing valve timer picker');
-          showValveTimerPicker(s.deviceId, s.label, isOpen, s.openCommand, s.closeCommand);
-          return;
-        }
-        // Direct toggle
-        const valveAction = isOpen ? (s.closeCommand || 'close') : (s.openCommand || 'open');
-        if (s.requireConfirm) {
-          const ok = await showConfirm(`${isOpen ? 'Close' : 'Open'} ${s.label || 'valve'}?`);
-          if (!ok) return;
-        }
-        applyDeviceAttrUpdate(s.deviceId, 'valve', isOpen ? 'closed' : 'open');
-        await sendCommand(s.deviceId, valveAction);
-        break;
-      }
-      case 'water': {
-        if (!d) { openTileEditor(slotId); return; }
-        // Water sensors are read-only, just open editor
-        openTileEditor(slotId);
-        return;
-      }
-      case 'shade': {
-        if (!d) { openTileEditor(slotId); return; }
-        const shadePos = getAttr(d, 'windowShade');
-        console.log('Shade tile clicked:', { deviceId: s.deviceId, label: s.label, shadePos });
-        showShadePositionPicker(s.deviceId, s.label, shadePos);
-        return;
-      }
-      case 'thermostat': {
-        if (!d) { openTileEditor(slotId); return; }
-        showThermostatPicker(s.deviceId, s.label || d.label || d.name);
-        return;
-      }
-      case 'momentary': {
-        if (!d) { openTileEditor(slotId); return; }
-        if (s.requireConfirm) {
-          const ok = await showConfirm(`Send "${s.command || 'push'}" to ${s.label || 'button'}?`);
-          if (!ok) return;
-        }
-        flashPressed(tileEl); // only feedback available — there's no attribute to reflect
-        await sendCommand(s.deviceId, s.command || 'push', s.commandArg || undefined);
-        return;
-      }
-      default: openTileEditor(slotId); return;
-    }
-    setTimeout(refreshAll, 400);
-  } catch (err) {
-    console.error('Command failed', err);
-    // A failed command may leave the optimistic tile update above showing the
-    // wrong state — resync from the hub rather than leaving it stuck wrong.
-    // Do this before flashErr: flashErr touches the tile element and must
-    // never be allowed to throw and skip the resync.
-    setTimeout(refreshAll, 400);
-    flashErr(tileEl);
-  }
-}
-
-function flashErr(tile) {
-  const orig = tile.style.outline;
-  tile.style.outline = '2px solid var(--alert)';
-  setTimeout(() => { tile.style.outline = orig; }, 600);
-}
-
-// Momentary tiles have no persistent attribute to reflect — this is the only
-// feedback that a tap actually registered, so it needs to be immediate and
-// not depend on any network round-trip.
-function flashPressed(tile) {
-  const orig = tile.style.outline;
-  tile.style.outline = '2px solid var(--info)';
-  setTimeout(() => { tile.style.outline = orig; }, 300);
-}
-
-// ── Confirmation modal ────────────────────────────────────────────────────────
-
-let confirmResolve = null;
-const confirmModal = document.getElementById('confirm-modal');
-
-function showConfirm(message) {
-  return new Promise(resolve => {
-    confirmResolve = resolve;
-    document.getElementById('confirm-title').textContent = 'Confirm';
-    document.getElementById('confirm-body').textContent = message;
-    confirmModal.classList.add('open');
-  });
-}
-
-document.getElementById('confirm-yes').addEventListener('click', () => {
-  confirmModal.classList.remove('open');
-  if (confirmResolve) { confirmResolve(true); confirmResolve = null; }
-});
-document.getElementById('confirm-no').addEventListener('click', () => {
-  confirmModal.classList.remove('open');

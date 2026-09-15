@@ -1,3 +1,105 @@
+        const imgUrl = d ? getImageUrl(d) : s.url || '';
+        if (imgUrl) openLightbox(imgUrl, s.label || '', s.deviceId || null);
+        return;
+      }
+      case 'valve': {
+        if (!d) { openTileEditor(slotId); return; }
+        const v = getAttr(d, 'valve');
+        const isOpen = v === 'open';
+        console.log('Valve tile clicked:', { deviceId: s.deviceId, label: s.label, valveTimer: s.valveTimer, isOpen });
+        // If timer is enabled, show duration picker instead of direct toggle
+        if (s.valveTimer) {
+          console.log('Showing valve timer picker');
+          showValveTimerPicker(s.deviceId, s.label, isOpen, s.openCommand, s.closeCommand);
+          return;
+        }
+        // Direct toggle
+        const valveAction = isOpen ? (s.closeCommand || 'close') : (s.openCommand || 'open');
+        if (s.requireConfirm) {
+          const ok = await showConfirm(`${isOpen ? 'Close' : 'Open'} ${s.label || 'valve'}?`);
+          if (!ok) return;
+        }
+        applyDeviceAttrUpdate(s.deviceId, 'valve', isOpen ? 'closed' : 'open');
+        await sendCommand(s.deviceId, valveAction);
+        break;
+      }
+      case 'water': {
+        if (!d) { openTileEditor(slotId); return; }
+        // Water sensors are read-only, just open editor
+        openTileEditor(slotId);
+        return;
+      }
+      case 'shade': {
+        if (!d) { openTileEditor(slotId); return; }
+        const shadePos = getAttr(d, 'windowShade');
+        console.log('Shade tile clicked:', { deviceId: s.deviceId, label: s.label, shadePos });
+        showShadePositionPicker(s.deviceId, s.label, shadePos);
+        return;
+      }
+      case 'thermostat': {
+        if (!d) { openTileEditor(slotId); return; }
+        showThermostatPicker(s.deviceId, s.label || d.label || d.name);
+        return;
+      }
+      case 'momentary': {
+        if (!d) { openTileEditor(slotId); return; }
+        if (s.requireConfirm) {
+          const ok = await showConfirm(`Send "${s.command || 'push'}" to ${s.label || 'button'}?`);
+          if (!ok) return;
+        }
+        flashPressed(tileEl); // only feedback available — there's no attribute to reflect
+        await sendCommand(s.deviceId, s.command || 'push', s.commandArg || undefined);
+        return;
+      }
+      default: openTileEditor(slotId); return;
+    }
+    setTimeout(refreshAll, 400);
+  } catch (err) {
+    console.error('Command failed', err);
+    // A failed command may leave the optimistic tile update above showing the
+    // wrong state — resync from the hub rather than leaving it stuck wrong.
+    // Do this before flashErr: flashErr touches the tile element and must
+    // never be allowed to throw and skip the resync.
+    setTimeout(refreshAll, 400);
+    flashErr(tileEl);
+  }
+}
+
+function flashErr(tile) {
+  const orig = tile.style.outline;
+  tile.style.outline = '2px solid var(--alert)';
+  setTimeout(() => { tile.style.outline = orig; }, 600);
+}
+
+// Momentary tiles have no persistent attribute to reflect — this is the only
+// feedback that a tap actually registered, so it needs to be immediate and
+// not depend on any network round-trip.
+function flashPressed(tile) {
+  const orig = tile.style.outline;
+  tile.style.outline = '2px solid var(--info)';
+  setTimeout(() => { tile.style.outline = orig; }, 300);
+}
+
+// ── Confirmation modal ────────────────────────────────────────────────────────
+
+let confirmResolve = null;
+const confirmModal = document.getElementById('confirm-modal');
+
+function showConfirm(message) {
+  return new Promise(resolve => {
+    confirmResolve = resolve;
+    document.getElementById('confirm-title').textContent = 'Confirm';
+    document.getElementById('confirm-body').textContent = message;
+    confirmModal.classList.add('open');
+  });
+}
+
+document.getElementById('confirm-yes').addEventListener('click', () => {
+  confirmModal.classList.remove('open');
+  if (confirmResolve) { confirmResolve(true); confirmResolve = null; }
+});
+document.getElementById('confirm-no').addEventListener('click', () => {
+  confirmModal.classList.remove('open');
   if (confirmResolve) { confirmResolve(false); confirmResolve = null; }
 });
 
@@ -524,20 +626,37 @@ function bindResizeHandle(tileEl, slotId) {
   const handle = tileEl.querySelector('.resize-handle');
   if (!handle) return;
 
+  // Only `.section` grids can express colSpan/rowSpan, so only they get a
+  // working handle. #right-col is a flex column, where grid-column/grid-row are
+  // inert; #cameras is flex too until a wide breakpoint turns it into a fixed
+  // 2-3 column grid, and either way the span rules are written `.section >
+  // [data-col=…]` so its children never match them.
+  //
+  // This used to be bound to every [data-slot] regardless. Dragging a
+  // right-column or camera tile changed nothing on screen — measured identical
+  // before and after — while still writing colSpan/rowSpan into config. The
+  // damage was deferred rather than absent: the tile kept those values, so
+  // moving it into a real section later made it jump to that size for no
+  // reason the user could connect to anything they had done.
+  if (!tileEl.parentElement || !tileEl.parentElement.classList.contains('section')) return;
+
   handle.addEventListener('pointerdown', e => {
     if (!editMode) return;
     e.stopPropagation(); e.preventDefault();
     handle.setPointerCapture(e.pointerId);
 
     const sectionEl = tileEl.parentElement;
-    const userCols = cfg.gridCols || 3;
     const rowH = parseFloat(getComputedStyle(document.documentElement)
       .getPropertyValue('--row-h')) || 80;
     const gap = parseFloat(getComputedStyle(document.documentElement)
       .getPropertyValue('--gap')) || 6;
 
+    // Read the real track count off the grid rather than trusting cfg.gridCols
+    // — they should agree, but only one of them is what the user is dragging in.
+    const cssColCount = gridColumnCount(sectionEl, (cfg.gridCols || 3) * 2);
+    const userCols = Math.max(1, Math.floor(cssColCount / 2));
+
     // Width of 1 user-column (= 2 internal CSS units + gap between them)
-    const cssColCount = userCols * 2;
     const cssUnitW = sectionEl
       ? (sectionEl.offsetWidth - gap * (cssColCount - 1)) / cssColCount
       : 50;
@@ -546,8 +665,11 @@ function bindResizeHandle(tileEl, slotId) {
     const startX = e.clientX, startY = e.clientY;
     const startW = tileEl.offsetWidth, startH = tileEl.offsetHeight;
 
-    // Valid user-column snapping values (0.5, 1, 2, 3 — capped at userCols)
-    const validCols = [0.5, 1, 2, 3].filter(c => c <= userCols);
+    // Every whole column up to the grid's width, plus ½. This used to be the
+    // fixed list [0.5,1,2,3], so at 4+ columns a tile could never be dragged
+    // wider than three — there was no way to reach full width by drag or menu.
+    const validCols = [0.5];
+    for (let c = 1; c <= userCols; c++) validCols.push(c);
 
     let snapCol = cfg.slots[slotId]?.colSpan ?? 1;
     let snapRow = cfg.slots[slotId]?.rowSpan ?? 1;
@@ -1209,9 +1331,14 @@ function bindCustomResizeHandle(el, dashName, slotId) {
 
     const dash = customDashboards[dashName];
     const gridEl = document.getElementById('custom-grid');
-    const gridCols = (dash && dash.gridCols) || 3;
     const gap = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gap')) || 6;
     const rowH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-h')) || 80;
+    // Read the real track count. This was `(dash && dash.gridCols) || 3` — a
+    // per-dashboard field nothing ever sets, so it was always 3, while the grid
+    // was auto-fill and actually had nine tracks at desktop width. A column came
+    // out ~415px instead of ~131px, so a drag needed roughly 500px of travel to
+    // advance one step and never lined up with a real track boundary.
+    const gridCols = gridColumnCount(gridEl, (dash && dash.gridCols) || cfg.gridCols || 3);
     const colW = gridEl ? (gridEl.offsetWidth - gap * (gridCols - 1)) / gridCols : 130;
     const colWithGap = colW + gap;
 
@@ -1221,7 +1348,8 @@ function bindCustomResizeHandle(el, dashName, slotId) {
     const tile = dash && dash.tiles.find(t => t.slotId === slotId);
     let snapCol = (tile && tile.colSpan) || 1;
     let snapRow = (tile && tile.rowSpan) || 1;
-    const validCols = [1, 2, 3].filter(c => c <= gridCols);
+    const validCols = [];
+    for (let c = 1; c <= gridCols; c++) validCols.push(c);
 
     function onMove(ev) {
       const dw = ev.clientX - startX;
@@ -1664,6 +1792,46 @@ const ICON_STATE_LABELS = {
   shade:  ['Open icon', 'Closed icon'],
 };
 
+/**
+ * Rebuild the "Tile width" menu to match the grid the tile actually lives in,
+ * preserving the current selection where it is still offered.
+ *
+ * The options used to be static markup: ½, 1, 2, "Full row (3 columns)". Two
+ * things were wrong with that. "Full row (3 columns)" is only a full row when
+ * Grid columns is 3 — at 6 it covered half the row, measured 623px of 1256px —
+ * and there was no option beyond 3 at all, so a 4-, 5- or 6-column dashboard
+ * had no way to make a tile full width by menu or by drag.
+ *
+ * ½ is main-dashboard only: sections run an internal 2x grid (colToSpan)
+ * precisely so a tile can span one half column, while custom dashboards are 1:1
+ * and CSS cannot span half a track. It used to be offered for custom tiles and
+ * then dropped on save (`if (cs > 1)` deletes 0.5), so picking it appeared to
+ * do nothing and reverted to Normal next time the editor opened.
+ */
+function buildColSpanOptions() {
+  const sel = document.getElementById('te-col-span');
+  if (!sel) return;
+  const cols = Math.max(1, Math.min(6, parseInt(cfg.gridCols, 10) || 3));
+  const previous = sel.value;
+
+  const opts = [];
+  if (!editingCustom) opts.push({ v: '0.5', t: 'Half (½ column)' });
+  for (let c = 1; c <= cols; c++) {
+    opts.push({
+      v: String(c),
+      t: c === 1 ? 'Normal (1 column)'
+        : c === cols ? `Full row (${c} columns)`
+        : `${c} columns`,
+    });
+  }
+
+  sel.innerHTML = opts.map(o => `<option value="${o.v}">${escapeHtml(o.t)}</option>`).join('');
+  // Keep the current value if it still exists; otherwise fall back to 1 rather
+  // than leaving the select blank (an older config may hold 0.5 on a custom
+  // tile, or a span wider than the grid was later narrowed to).
+  sel.value = opts.some(o => o.v === previous) ? previous : '1';
+}
+
 function syncTileEditorVisibility() {
   const kind = document.getElementById('te-kind').value;
   const isSpacer = kind === 'spacer';
@@ -1678,7 +1846,13 @@ function syncTileEditorVisibility() {
   document.getElementById('te-valve-cmd-row').style.display   = kind === 'valve' ? '' : 'none';
   document.getElementById('te-orient-row').style.display   = kind === 'image'          ? '' : 'none';
   document.getElementById('te-fit-row').style.display      = kind === 'image'          ? '' : 'none';
-  document.getElementById('te-row-span-row').style.display = kind !== 'image'          ? '' : 'none';
+  // Row height is offered for images too now. It was hidden for them because
+  // main-dashboard image tiles ignored rowSpan (slotHtml dropped the attribute,
+  // and aspect-ratio: 16/9 would have overridden grid-row anyway); both are
+  // fixed, and custom-dashboard image tiles always honoured it.
+  document.getElementById('te-row-span-row').style.display = '';
+
+  buildColSpanOptions();
 
   const iconEligible = ICON_ELIGIBLE_KINDS.includes(kind);
   const stateLabels = ICON_STATE_LABELS[kind];
@@ -1829,6 +2003,11 @@ document.getElementById('te-save').addEventListener('click', () => {
         tile.closeCommand = vClose || undefined;
         const cs = parseFloat(document.getElementById('te-col-span').value) || 1;
         const rs = parseInt(document.getElementById('te-row-span').value, 10) || 1;
+        // `> 1` rather than `!== 1` on purpose: custom grids have no half-column
+        // track, and the editor no longer offers ½ here, so a 0.5 arriving from
+        // an older config is normalised away instead of being stored and then
+        // ignored at render time. (The main dashboard, which can express ½,
+        // keeps its own `=== 1` check.)
         if (cs > 1) tile.colSpan = cs; else delete tile.colSpan;
         if (rs > 1) tile.rowSpan = rs; else delete tile.rowSpan;
         const icon = document.getElementById('te-icon').value;
@@ -2032,196 +2211,3 @@ async function refreshAll(force) {
   renderAll(force);
   updateWsDotTitle();
 }
-
-function setConnDot(ok) {
-  document.getElementById('conn-dot').classList.toggle('ok', !!ok);
-}
-
-// Polling is the baseline that always runs, at the configured rate, whether or
-// not the WebSocket is connected. The socket is an accelerant on top of it,
-// never a replacement — see connectWebSocket() for why trusting the socket
-// alone silently freezes the dashboard.
-//
-// The poll deliberately does NOT slow down while the socket is live. The
-// socket only exists for LAN/tunnel hubs, and the "don't poll faster than 5s"
-// rule (see CLAUDE.md gotchas) is a Hubitat *Cloud* rate limit that doesn't
-// apply there — so a full-rate poll costs nothing a cloud-connected setup
-// isn't already paying, and it caps worst-case staleness at cfg.pollSec
-// instead of however long a dead-but-open socket goes unnoticed.
-const WS_RECONNECT_MS = 30000;
-
-let currentPollMs   = null;
-let pollInFlight    = false;
-let lastDataAt      = 0;   // last time device state actually arrived (poll or event)
-let lastWsEventAt   = 0;   // last time the socket delivered anything
-let lastWsAttemptAt = 0;   // throttles reconnects driven from pollTick
-
-function wsIsLive() {
-  return !!ws && ws.readyState === WebSocket.OPEN;
-}
-
-function desiredPollMs() {
-  return Math.max(2, cfg.pollSec) * 1000;
-}
-
-async function pollTick() {
-  // A socket proxied through a plain Worker can stop delivering without ever
-  // firing 'close' — readyState stays OPEN while nothing arrives. Re-check
-  // health every tick instead of trusting the last 'open' event we saw.
-  if (ws && !wsIsLive()) {
-    try { ws.close(); } catch { /* already gone */ }
-    ws = null;
-    setWsDot(false);
-  }
-  // Retry the socket from here too (the close handler's own 30s timer never
-  // fires for a socket that died without closing), but no faster than that
-  // same backoff — otherwise a hub that refuses the eventsocket would get
-  // hammered once per poll tick.
-  if (!ws && !HND_VIA_CLOUD && Date.now() - lastWsAttemptAt >= WS_RECONNECT_MS) {
-    connectWebSocket();
-  }
-
-  // Re-rate if WebSocket health changed since the interval was created.
-  const want = desiredPollMs();
-  if (want !== currentPollMs) startPolling();
-
-  // A slow hub shouldn't let ticks pile up into overlapping /devices/all calls.
-  if (pollInFlight) return;
-  pollInFlight = true;
-  try { await refreshAll(); }
-  finally { pollInFlight = false; }
-}
-
-function startPolling() {
-  stopPolling();
-  currentPollMs = desiredPollMs();
-  pollTimer = setInterval(pollTick, currentPollMs);
-  updateWsDotTitle();
-}
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  currentPollMs = null;
-}
-// iOS throttles (and can fully suspend) setInterval/setTimeout timers for a
-// backgrounded PWA — a locked screen, switching apps, or just leaving it idle
-// — with no error or event of its own. The periodic poll above can silently
-// stop firing for minutes; tapping a tile right before that happens is
-// exactly the "why didn't this update" complaint (a manual pull-to-refresh
-// always "fixes" it because it's a fresh user-triggered fetch, not because
-// polling was actually working). Catch up immediately whenever the page is
-// looked at again rather than waiting for the next tick that may not come.
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') refreshAll(true);
-});
-
-// WebSocket mode only patches attribute values on devices already known at
-// connect time (see handleHubEvent) — it never adds newly-created devices to
-// the `devices` array, and connecting successfully calls stopPolling(), which
-// would otherwise have picked up new devices on its next full-list refresh.
-// A long-lived session (e.g. an iOS PWA that's never force-quit) can end up
-// stuck for hours/days without seeing devices added on the hub after connect.
-// This timer runs independently of polling/WebSocket state so new devices
-// still show up within a few minutes either way.
-const DEVICE_LIST_SYNC_MS = 5 * 60 * 1000;
-let deviceListSyncTimer = null;
-function startDeviceListSync() {
-  if (deviceListSyncTimer) return;
-  // Routed through pollTick (not refreshAll) so it shares the in-flight guard
-  // and the socket health check rather than racing the regular poll.
-  deviceListSyncTimer = setInterval(pollTick, DEVICE_LIST_SYNC_MS);
-}
-
-// ── WebSocket ─────────────────────────────────────────────────────────────────
-//
-// For LAN/tunnel hub URLs, the Worker proxies the hub's eventsocket so we
-// receive real-time device events instead of polling every N seconds.
-// For cloud URLs the Worker returns 501 and we fall back to polling.
-
-function connectWebSocket() {
-  if (ws) return; // already connected
-  // Cloud Maker API has no WebSocket event stream — skip and use polling.
-  if (HND_VIA_CLOUD) { startPolling(); return; }
-  lastWsAttemptAt = Date.now();
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const hubId = extractHubId();
-  const params = new URLSearchParams();
-  if (hubId) params.set('hubId', hubId);
-  // Pass hub base URL as a query param so the Worker can proxy the eventsocket
-  // even in browser-only mode (no KV).  The eventsocket itself is unauthenticated
-  // so no token is exposed here.
-  if (cfg.hubBaseUrl) params.set('hubBaseUrl', cfg.hubBaseUrl);
-  const query = params.size ? `?${params}` : '';
-  const url   = `${proto}//${location.host}/eventsocket`;
-
-  try {
-    ws = new WebSocket(url);
-  } catch (e) {
-    console.warn('WebSocket construction failed, using polling', e);
-    startPolling();
-    return;
-  }
-
-  ws.addEventListener('open', () => {
-    console.log('Hub WebSocket connected — real-time mode');
-    setWsDot(true);
-    lastWsEventAt = Date.now();
-    // Deliberately does NOT stop polling. The Worker proxies this socket from a
-    // plain fetch handler — no Durable Object, no ctx.waitUntil — so the proxy
-    // can be torn down (Worker eviction, tunnel idle timeout, CF Access session
-    // expiry) without a 'close' frame ever reaching the browser. readyState
-    // stays OPEN, no events arrive, and nothing ever restarts the poll: the
-    // dashboard then freezes until a manual pull-to-refresh, which is exactly
-    // the "locks/presence don't update until I refresh" symptom. The poll
-    // keeps running at full rate underneath; the socket just makes updates
-    // land sooner than the next tick.
-    updateWsDotTitle();
-  });
-
-  ws.addEventListener('message', e => {
-    lastWsEventAt = Date.now();
-    try {
-      const evt = JSON.parse(e.data);
-      handleHubEvent(evt);
-    } catch {}
-  });
-
-  ws.addEventListener('close', e => {
-    const reason = e.reason ? ` — ${e.reason}` : '';
-    console.warn(`Hub WebSocket closed (code ${e.code})${reason} — falling back to polling`);
-    ws = null;
-    setWsDot(false);
-    startPolling(); // back to the fast cadence now that push is gone
-    // Try to reconnect after 30s
-    if (wsReconnTimer) clearTimeout(wsReconnTimer);
-    wsReconnTimer = setTimeout(() => {
-      if (!ws) connectWebSocket();
-    }, 30000);
-  });
-
-  ws.addEventListener('error', e => {
-    console.warn('Hub WebSocket error:', e);
-  });
-}
-
-function setWsDot(live) {
-  document.getElementById('ws-dot').classList.toggle('live', !!live);
-  updateWsDotTitle();
-}
-
-// The dot alone can't distinguish "socket open and delivering" from "socket
-// open but silently dead" — the failure mode this whole path guards against.
-// Put the real state in the tooltip so a stale dashboard can be diagnosed by
-// hovering/long-pressing instead of opening a console.
-function updateWsDotTitle() {
-  const el = document.getElementById('ws-dot');
-  if (!el) return;
-  const ago = ms => {
-    if (!ms) return 'never';
-    const s = Math.round((Date.now() - ms) / 1000);
-    if (s < 60) return `${s}s ago`;
-    const m = Math.floor(s / 60);
-    return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`;
-  };
-  const mode = wsIsLive() ? 'WebSocket (live)' : (HND_VIA_CLOUD ? 'Polling (cloud — no WebSocket)' : 'Polling');
-  const every = currentPollMs ? `${Math.round(currentPollMs / 1000)}s` : 'off';
-  el.title = `${mode}\nPolling every ${every}\nLast data: ${ago(lastDataAt)}` +

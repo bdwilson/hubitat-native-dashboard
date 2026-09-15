@@ -1,7 +1,7 @@
 {
-  "version": "19e8e8b1a0",
-  "upstreamSha256": "bcaa156b72e8",
-  "builtAt": "2026-09-14T19:08:41.963Z",
+  "version": "f6508ff114",
+  "upstreamSha256": "b4c250cc259b",
+  "builtAt": "2026-09-15T19:23:22.506Z",
   "shell": "hnd-shell.html",
   "chunks": [
     "hnd-app-1.js",
@@ -26,9 +26,9 @@
   ],
   "relabels": 17,
   "bytes": {
-    "hnd-shell.html": 66790,
-    "hnd-app-1.js": 98282,
-    "hnd-app-2.js": 98225,
-    "hnd-app-3.js": 33567
+    "hnd-shell.html": 68929,
+    "hnd-app-1.js": 98263,
+    "hnd-app-2.js": 98295,
+    "hnd-app-3.js": 42412
   }
 }

@@ -1,3 +1,195 @@
+function setConnDot(ok) {
+  document.getElementById('conn-dot').classList.toggle('ok', !!ok);
+}
+
+// Polling is the baseline that always runs, at the configured rate, whether or
+// not the WebSocket is connected. The socket is an accelerant on top of it,
+// never a replacement — see connectWebSocket() for why trusting the socket
+// alone silently freezes the dashboard.
+//
+// The poll deliberately does NOT slow down while the socket is live. The
+// socket only exists for LAN/tunnel hubs, and the "don't poll faster than 5s"
+// rule (see CLAUDE.md gotchas) is a Hubitat *Cloud* rate limit that doesn't
+// apply there — so a full-rate poll costs nothing a cloud-connected setup
+// isn't already paying, and it caps worst-case staleness at cfg.pollSec
+// instead of however long a dead-but-open socket goes unnoticed.
+const WS_RECONNECT_MS = 30000;
+
+let currentPollMs   = null;
+let pollInFlight    = false;
+let lastDataAt      = 0;   // last time device state actually arrived (poll or event)
+let lastWsEventAt   = 0;   // last time the socket delivered anything
+let lastWsAttemptAt = 0;   // throttles reconnects driven from pollTick
+
+function wsIsLive() {
+  return !!ws && ws.readyState === WebSocket.OPEN;
+}
+
+function desiredPollMs() {
+  return Math.max(2, cfg.pollSec) * 1000;
+}
+
+async function pollTick() {
+  // A socket proxied through a plain Worker can stop delivering without ever
+  // firing 'close' — readyState stays OPEN while nothing arrives. Re-check
+  // health every tick instead of trusting the last 'open' event we saw.
+  if (ws && !wsIsLive()) {
+    try { ws.close(); } catch { /* already gone */ }
+    ws = null;
+    setWsDot(false);
+  }
+  // Retry the socket from here too (the close handler's own 30s timer never
+  // fires for a socket that died without closing), but no faster than that
+  // same backoff — otherwise a hub that refuses the eventsocket would get
+  // hammered once per poll tick.
+  if (!ws && !HND_VIA_CLOUD && Date.now() - lastWsAttemptAt >= WS_RECONNECT_MS) {
+    connectWebSocket();
+  }
+
+  // Re-rate if WebSocket health changed since the interval was created.
+  const want = desiredPollMs();
+  if (want !== currentPollMs) startPolling();
+
+  // A slow hub shouldn't let ticks pile up into overlapping /devices/all calls.
+  if (pollInFlight) return;
+  pollInFlight = true;
+  try { await refreshAll(); }
+  finally { pollInFlight = false; }
+}
+
+function startPolling() {
+  stopPolling();
+  currentPollMs = desiredPollMs();
+  pollTimer = setInterval(pollTick, currentPollMs);
+  updateWsDotTitle();
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  currentPollMs = null;
+}
+// iOS throttles (and can fully suspend) setInterval/setTimeout timers for a
+// backgrounded PWA — a locked screen, switching apps, or just leaving it idle
+// — with no error or event of its own. The periodic poll above can silently
+// stop firing for minutes; tapping a tile right before that happens is
+// exactly the "why didn't this update" complaint (a manual pull-to-refresh
+// always "fixes" it because it's a fresh user-triggered fetch, not because
+// polling was actually working). Catch up immediately whenever the page is
+// looked at again rather than waiting for the next tick that may not come.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshAll(true);
+});
+
+// WebSocket mode only patches attribute values on devices already known at
+// connect time (see handleHubEvent) — it never adds newly-created devices to
+// the `devices` array, and connecting successfully calls stopPolling(), which
+// would otherwise have picked up new devices on its next full-list refresh.
+// A long-lived session (e.g. an iOS PWA that's never force-quit) can end up
+// stuck for hours/days without seeing devices added on the hub after connect.
+// This timer runs independently of polling/WebSocket state so new devices
+// still show up within a few minutes either way.
+const DEVICE_LIST_SYNC_MS = 5 * 60 * 1000;
+let deviceListSyncTimer = null;
+function startDeviceListSync() {
+  if (deviceListSyncTimer) return;
+  // Routed through pollTick (not refreshAll) so it shares the in-flight guard
+  // and the socket health check rather than racing the regular poll.
+  deviceListSyncTimer = setInterval(pollTick, DEVICE_LIST_SYNC_MS);
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+//
+// For LAN/tunnel hub URLs, the Worker proxies the hub's eventsocket so we
+// receive real-time device events instead of polling every N seconds.
+// For cloud URLs the Worker returns 501 and we fall back to polling.
+
+function connectWebSocket() {
+  if (ws) return; // already connected
+  // Cloud Maker API has no WebSocket event stream — skip and use polling.
+  if (HND_VIA_CLOUD) { startPolling(); return; }
+  lastWsAttemptAt = Date.now();
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const hubId = extractHubId();
+  const params = new URLSearchParams();
+  if (hubId) params.set('hubId', hubId);
+  // Pass hub base URL as a query param so the Worker can proxy the eventsocket
+  // even in browser-only mode (no KV).  The eventsocket itself is unauthenticated
+  // so no token is exposed here.
+  if (cfg.hubBaseUrl) params.set('hubBaseUrl', cfg.hubBaseUrl);
+  const query = params.size ? `?${params}` : '';
+  const url   = `${proto}//${location.host}/eventsocket`;
+
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    console.warn('WebSocket construction failed, using polling', e);
+    startPolling();
+    return;
+  }
+
+  ws.addEventListener('open', () => {
+    console.log('Hub WebSocket connected — real-time mode');
+    setWsDot(true);
+    lastWsEventAt = Date.now();
+    // Deliberately does NOT stop polling. The Worker proxies this socket from a
+    // plain fetch handler — no Durable Object, no ctx.waitUntil — so the proxy
+    // can be torn down (Worker eviction, tunnel idle timeout, CF Access session
+    // expiry) without a 'close' frame ever reaching the browser. readyState
+    // stays OPEN, no events arrive, and nothing ever restarts the poll: the
+    // dashboard then freezes until a manual pull-to-refresh, which is exactly
+    // the "locks/presence don't update until I refresh" symptom. The poll
+    // keeps running at full rate underneath; the socket just makes updates
+    // land sooner than the next tick.
+    updateWsDotTitle();
+  });
+
+  ws.addEventListener('message', e => {
+    lastWsEventAt = Date.now();
+    try {
+      const evt = JSON.parse(e.data);
+      handleHubEvent(evt);
+    } catch {}
+  });
+
+  ws.addEventListener('close', e => {
+    const reason = e.reason ? ` — ${e.reason}` : '';
+    console.warn(`Hub WebSocket closed (code ${e.code})${reason} — falling back to polling`);
+    ws = null;
+    setWsDot(false);
+    startPolling(); // back to the fast cadence now that push is gone
+    // Try to reconnect after 30s
+    if (wsReconnTimer) clearTimeout(wsReconnTimer);
+    wsReconnTimer = setTimeout(() => {
+      if (!ws) connectWebSocket();
+    }, 30000);
+  });
+
+  ws.addEventListener('error', e => {
+    console.warn('Hub WebSocket error:', e);
+  });
+}
+
+function setWsDot(live) {
+  document.getElementById('ws-dot').classList.toggle('live', !!live);
+  updateWsDotTitle();
+}
+
+// The dot alone can't distinguish "socket open and delivering" from "socket
+// open but silently dead" — the failure mode this whole path guards against.
+// Put the real state in the tooltip so a stale dashboard can be diagnosed by
+// hovering/long-pressing instead of opening a console.
+function updateWsDotTitle() {
+  const el = document.getElementById('ws-dot');
+  if (!el) return;
+  const ago = ms => {
+    if (!ms) return 'never';
+    const s = Math.round((Date.now() - ms) / 1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`;
+  };
+  const mode = wsIsLive() ? 'WebSocket (live)' : (HND_VIA_CLOUD ? 'Polling (cloud — no WebSocket)' : 'Polling');
+  const every = currentPollMs ? `${Math.round(currentPollMs / 1000)}s` : 'off';
+  el.title = `${mode}\nPolling every ${every}\nLast data: ${ago(lastDataAt)}` +
              (wsIsLive() ? `\nLast socket event: ${ago(lastWsEventAt)}` : '');
 }
 
@@ -372,11 +564,13 @@ function renderDashboardManager() {
       ({ key: 'custom/' + name, label: dash.title || name, kind: 'custom' }))
   ];
 
-  // Initialize if empty. Dynamic dashboards are opt-in; main/custom start visible.
+  // Initialize if empty — everything visible, dynamic groups included. Must
+  // match the same block in updateNavChips(); these two are the only places a
+  // fresh config's visibility defaults get written.
   if (!dashboardsOrder.length) {
     dashboardsOrder = allDashboards.map(d => d.key);
     dashboardsVisible = {};
-    allDashboards.forEach(d => { dashboardsVisible[d.key] = d.kind !== 'dynamic'; });
+    allDashboards.forEach(d => { dashboardsVisible[d.key] = true; });
   }
 
   // Render draggable items for each dashboard
@@ -662,6 +856,12 @@ async function boot() {
   } else {
     await refreshDevices();
     renderAll();
+    // Nav chips must be rebuilt AFTER devices land: dynamic groups are filtered
+    // out of the bar while they have no matching devices, and both calls above
+    // ran against an empty `devices`. Without this, every auto-generated
+    // dashboard stays missing from the nav until some unrelated event
+    // (a hashchange, opening settings) happens to re-render it.
+    updateNavChips();
     updateStatusBar();
     // Try WebSocket first; fall back to polling on close/error
     connectWebSocket();
