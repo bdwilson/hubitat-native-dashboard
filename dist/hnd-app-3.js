@@ -1,3 +1,66 @@
+  const isUserAdded = editingSlot.startsWith('u');
+  if (!confirm(isUserAdded
+    ? 'Remove this tile from the layout?'
+    : 'Hide this tile? (It will be invisible outside edit mode. Use × in edit mode to restore.)')) return;
+
+  if (isUserAdded) {
+    // User-added tile: remove from layout and delete the slot
+    const layout = cfg.layout || JSON.parse(JSON.stringify(LAYOUT_DEFAULTS));
+    for (const ids of Object.values(layout)) {
+      const idx = ids.indexOf(editingSlot);
+      if (idx !== -1) { ids.splice(idx, 1); break; }
+    }
+    cfg.layout = layout;
+    delete cfg.slots[editingSlot];
+  } else {
+    // Fixed slot: just hide it
+    cfg.slots[editingSlot] = { ...(cfg.slots[editingSlot] || {}), kind: 'hidden' };
+  }
+  saveConfigCache();
+  markDirty();
+  buildLayout(); renderAll();
+  tileEditor.classList.remove('open');
+});
+
+// ── Polling and device refresh ────────────────────────────────────────────────
+
+async function refreshDevices() {
+  if (!cfg.hubBaseUrl || !cfg.hubAppId) {
+    return { ok: false, error: 'Hub not configured — enter your Base URL and App ID in settings.' };
+  }
+  if (!cfg.hubToken && !cfg.hubHasToken) {
+    return { ok: false, error: 'Access token not set — paste your Maker API token in the Token field above.' };
+  }
+  try {
+    devices = await api('/devices/all');
+    if (!Array.isArray(devices)) devices = [];
+
+    try {
+      hubModes = await api('/modes') || [];
+      const active = hubModes.find(m => m.active);
+      if (active) window.__currentMode = active.name;
+    } catch {}
+
+    try {
+      const hsm = await api('/hsm');
+      if (hsm && hsm.hsm) window.__hsmState = hsm.hsm;
+    } catch {}
+
+    setConnDot(true);
+    return { ok: true };
+  } catch (e) {
+    setConnDot(false);
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+async function refreshAll(force) {
+  const r = await refreshDevices();
+  if (r && r.ok) lastDataAt = Date.now();
+  renderAll(force);
+  updateWsDotTitle();
+}
+
 function setConnDot(ok) {
   document.getElementById('conn-dot').classList.toggle('ok', !!ok);
 }

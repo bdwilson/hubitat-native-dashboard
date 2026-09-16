@@ -1,3 +1,15 @@
+          } else if (s.urlNewTab) {
+            window.open(s.url, '_blank');
+          } else {
+            window.location.href = s.url;
+          }
+        } else {
+          openTileEditor(slotId);
+        }
+        return;
+      }
+      case 'image': {
+        // Tap → open lightbox with full-size image
         const imgUrl = d ? getImageUrl(d) : s.url || '';
         if (imgUrl) openLightbox(imgUrl, s.label || '', s.deviceId || null);
         return;
@@ -560,61 +572,134 @@ function onAddTile(sectionId) {
 
 // ── Drag-to-reorder (edit mode) ───────────────────────────────────────────────
 
+// ── Tile reordering ──────────────────────────────────────────────────────────
+//
+// Pointer-based, deliberately NOT HTML5 drag-and-drop. Two independent reasons,
+// each of which alone made reordering unusable:
+//
+// 1. HTML5 DnD never fires for touch input. Reordering was therefore impossible
+//    on a phone or tablet — not fiddly, impossible. Pointer events are what the
+//    resize handle already uses and cover mouse, touch and pen alike.
+//
+// 2. On desktop the live poll silently killed drops. renderCustomDashboard()
+//    rebuilds grid.innerHTML on every refreshAll() — every pollSec, 5s by
+//    default — destroying the element mid-gesture. The custom grid additionally
+//    kept its drag state in a closure variable that the rebuild re-created as
+//    null, so the replacement tiles' dragover skipped preventDefault() and the
+//    browser rejected the drop outright. The tile snapped back and nothing
+//    happened, more often the longer the drag took, which made it look flaky
+//    rather than broken. A dashboard with frequently-changing tiles could not
+//    be reordered at all.
+//
+// Renders are suspended while a drag is in flight (reorderInProgress), so the
+// grid cannot be pulled out from under the gesture.
+
+let reorderActive = null; // truthy while a drag is in flight
+
+function reorderInProgress() { return !!reorderActive; }
+
+/**
+ * Where to re-insert so the moved tile ends up where it was dropped.
+ *
+ * The target index must be read BEFORE the source is spliced out. Removing the
+ * source shifts every later element down by one, so a forward move re-read
+ * afterwards lands one position short of the tile it was dropped on — which is
+ * exactly what the old code did (`indexOf(target)` after the splice). Reading
+ * first makes both directions land on the target's own position.
+ */
+function moveByIds(arr, fromId, toId, idOf) {
+  const from = arr.findIndex(x => idOf(x) === fromId);
+  const to   = arr.findIndex(x => idOf(x) === toId);
+  if (from === -1 || to === -1 || from === to) return false;
+  const [item] = arr.splice(from, 1);
+  arr.splice(to, 0, item);
+  return true;
+}
+
+/**
+ * Make one tile draggable by its handle.
+ *   el        – the tile element
+ *   sourceId  – this tile's identifier
+ *   attr      – attribute naming sibling tiles, e.g. 'data-slot'
+ *   commit    – (fromId, toId) => void; performs the move, persists, re-renders
+ */
+function bindTileReorder(el, sourceId, attr, commit) {
+  const handle = el.querySelector('.tile-drag-handle');
+  if (!handle || sourceId == null) return;
+
+  handle.addEventListener('pointerdown', e => {
+    if (!editMode) return;
+    e.preventDefault(); e.stopPropagation();
+    try { handle.setPointerCapture(e.pointerId); } catch {}
+
+    const startX = e.clientX, startY = e.clientY;
+    let lastTarget = null, moved = false;
+    reorderActive = sourceId;
+
+    const clearTarget = () => {
+      if (lastTarget) lastTarget.classList.remove('drag-over');
+      lastTarget = null;
+    };
+
+    function onMove(ev) {
+      // Small threshold so a tap on the handle isn't treated as a drag.
+      if (!moved) {
+        if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
+        moved = true;
+        el.classList.add('dragging'); // also sets pointer-events:none, see CSS
+      }
+      // Must match the TILE, not the remove button or drag handle inside it —
+      // those carry the same attribute, and closest() would return the button.
+      const under = document.elementFromPoint(ev.clientX, ev.clientY);
+      const t = under && under.closest(`.tile[${attr}], .image-tile[${attr}]`);
+      if (t !== lastTarget) {
+        clearTarget();
+        if (t && t !== el) { t.classList.add('drag-over'); lastTarget = t; }
+      }
+    }
+
+    function onUp() {
+      handle.removeEventListener('pointermove', onMove);
+      el.classList.remove('dragging');
+      const targetId = lastTarget ? lastTarget.getAttribute(attr) : null;
+      clearTarget();
+      reorderActive = null;
+      if (moved && targetId && targetId !== sourceId) commit(sourceId, targetId);
+      else renderAll(); // catch up on whatever the suspended polls missed
+    }
+
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp, { once: true });
+    handle.addEventListener('pointercancel', onUp, { once: true });
+  });
+}
+
 function bindDragEvents(el, sectionId) {
-  el.setAttribute('draggable', 'true');
-
-  el.addEventListener('dragstart', e => {
-    if (!editMode) { e.preventDefault(); return; }
-    dragSlot    = el.dataset.slot;
-    dragSection = sectionId;
-    e.dataTransfer.effectAllowed = 'move';
-    setTimeout(() => el.classList.add('dragging'), 0);
-  });
-  el.addEventListener('dragend', () => {
-    el.classList.remove('dragging');
-    document.querySelectorAll('.drag-over').forEach(t => t.classList.remove('drag-over'));
-    dragSlot = null; dragSection = null;
-  });
-  el.addEventListener('dragover', e => {
-    if (!editMode || !dragSlot) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    el.classList.add('drag-over');
-  });
-  el.addEventListener('dragleave', () => {
-    el.classList.remove('drag-over');
-  });
-  el.addEventListener('drop', e => {
-    e.preventDefault();
-    el.classList.remove('drag-over');
-    const targetSlot = el.dataset.slot;
-    if (!dragSlot || dragSlot === targetSlot) return;
-
+  bindTileReorder(el, el.dataset.slot, 'data-slot', (fromSlot, toSlot) => {
     const layout = cfg.layout || JSON.parse(JSON.stringify(LAYOUT_DEFAULTS));
-    // Find which section each belongs to
     let fromSection = null, toSection = null;
     for (const [sec, ids] of Object.entries(layout)) {
-      if (ids.includes(dragSlot))  fromSection = sec;
-      if (ids.includes(targetSlot)) toSection  = sec;
+      if (ids.includes(fromSlot)) fromSection = sec;
+      if (ids.includes(toSlot))   toSection  = sec;
     }
     if (!fromSection || !toSection) return;
 
-    // Remove from source
-    const fromArr = layout[fromSection];
-    fromArr.splice(fromArr.indexOf(dragSlot), 1);
-
-    // Insert before target in destination
-    const toArr = layout[toSection];
-    const toIdx = toArr.indexOf(targetSlot);
-    if (toIdx === -1) toArr.push(dragSlot);
-    else toArr.splice(toIdx, 0, dragSlot);
+    if (fromSection === toSection) {
+      if (!moveByIds(layout[fromSection], fromSlot, toSlot, x => x)) return;
+    } else {
+      // Across sections: drop into the target's position in its own section.
+      const fromArr = layout[fromSection];
+      const toArr   = layout[toSection];
+      const toIdx   = toArr.indexOf(toSlot);
+      fromArr.splice(fromArr.indexOf(fromSlot), 1);
+      if (toIdx === -1) toArr.push(fromSlot); else toArr.splice(toIdx, 0, fromSlot);
+    }
 
     cfg.layout = layout;
     saveConfigCache();
     markDirty();
     buildLayout();
     renderAll();
-    dragSlot = null; dragSection = null;
   });
 }
 
@@ -707,10 +792,12 @@ function bindResizeHandle(tileEl, slotId) {
 
 // ── Dynamic dashboards ────────────────────────────────────────────────────────
 
-function renderDynamicDashboard(key) {
+function renderDynamicDashboard(key, force) {
   const group = DYNAMIC_GROUPS.find(g => g.key === key);
   const grid  = document.getElementById('dynamic-grid');
   if (!group || !grid) return;
+  // Same reason as renderCustomDashboard(): don't rebuild under a live drag.
+  if (reorderInProgress() && !force) return;
 
   document.getElementById('dash-title').textContent = group.label;
 
@@ -967,51 +1054,19 @@ async function onDynTileClick(deviceId, groupKey) {
 
 function bindDynDragEvents(grid, key, deviceIdOrder) {
   grid.querySelectorAll('.tile[data-dyn-id]').forEach(el => {
-    el.setAttribute('draggable', 'true');
-
-    el.addEventListener('dragstart', e => {
-      if (!editMode) { e.preventDefault(); return; }
-      dragDynId = el.dataset.dynId;
-      e.dataTransfer.effectAllowed = 'move';
-      setTimeout(() => el.classList.add('dragging'), 0);
-    });
-    el.addEventListener('dragend', () => {
-      el.classList.remove('dragging');
-      grid.querySelectorAll('.drag-over').forEach(t => t.classList.remove('drag-over'));
-      dragDynId = null;
-    });
-    el.addEventListener('dragover', e => {
-      if (!editMode || !dragDynId) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      el.classList.add('drag-over');
-    });
-    el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
-    el.addEventListener('drop', e => {
-      e.preventDefault();
-      el.classList.remove('drag-over');
-      const targetId = el.dataset.dynId;
-      if (!dragDynId || dragDynId === targetId) return;
-
-      // Build current order (use stored or rendered)
+    bindTileReorder(el, el.dataset.dynId, 'data-dyn-id', (fromId, toId) => {
+      // Stored order wins; fall back to render order the first time. Both ids
+      // are appended if absent, since a device can appear after the last save.
       const current = (dynamicOrder[key] && dynamicOrder[key].length)
         ? [...dynamicOrder[key]]
         : [...deviceIdOrder];
+      if (!current.includes(fromId)) current.push(fromId);
+      if (!current.includes(toId))   current.push(toId);
 
-      // Ensure both IDs are in current (may have been added since last save)
-      if (!current.includes(dragDynId))  current.push(dragDynId);
-      if (!current.includes(targetId))   current.push(targetId);
-
-      const fromIdx = current.indexOf(dragDynId);
-      current.splice(fromIdx, 1);
-      const toIdx = current.indexOf(targetId);
-      if (toIdx === -1) current.push(dragDynId);
-      else current.splice(toIdx, 0, dragDynId);
-
+      if (!moveByIds(current, fromId, toId, x => x)) return;
       dynamicOrder[key] = current;
-      dragDynId = null;
       saveDynamicConfig();
-      renderDynamicDashboard(key);
+      renderDynamicDashboard(key, true);
     });
   });
 }
@@ -1033,6 +1088,10 @@ function renderCustomDashboard(name, force) {
   const dash = customDashboards[name];
   const grid  = document.getElementById('custom-grid');
   if (!grid) return;
+  // A poll-driven rebuild mid-drag destroys the element being dragged and
+  // cancels the gesture — the single biggest reason reordering here "didn't
+  // work". `force` is passed by the reorder commit itself, which must rebuild.
+  if (reorderInProgress() && !force) return;
 
   document.getElementById('dash-title').textContent = dash ? (dash.title || name) : name;
 
@@ -1275,47 +1334,12 @@ async function saveCustomDashboards() {
 }
 
 function bindCustomDragEvents(grid, dashName) {
-  let dragCustomSlotId = null;
-
   grid.querySelectorAll('.tile[data-custom-slot], .image-tile[data-custom-slot]').forEach(el => {
-    el.setAttribute('draggable', 'true');
-
-    el.addEventListener('dragstart', e => {
-      if (!editMode) { e.preventDefault(); return; }
-      dragCustomSlotId = el.dataset.customSlot;
-      e.dataTransfer.effectAllowed = 'move';
-      setTimeout(() => el.classList.add('dragging'), 0);
-    });
-    el.addEventListener('dragend', () => {
-      el.classList.remove('dragging');
-      grid.querySelectorAll('.drag-over').forEach(t => t.classList.remove('drag-over'));
-      dragCustomSlotId = null;
-    });
-    el.addEventListener('dragover', e => {
-      if (!editMode || !dragCustomSlotId) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      el.classList.add('drag-over');
-    });
-    el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
-    el.addEventListener('drop', e => {
-      e.preventDefault();
-      el.classList.remove('drag-over');
-      const targetSlotId = el.dataset.customSlot;
-      if (!dragCustomSlotId || dragCustomSlotId === targetSlotId) return;
-
+    bindTileReorder(el, el.dataset.customSlot, 'data-custom-slot', (fromId, toId) => {
       const dash = customDashboards[dashName];
-      if (!dash) return;
-      const fromIdx = dash.tiles.findIndex(t => t.slotId === dragCustomSlotId);
-      if (fromIdx === -1) return;
-      const [moved] = dash.tiles.splice(fromIdx, 1);
-      const toIdx = dash.tiles.findIndex(t => t.slotId === targetSlotId);
-      if (toIdx === -1) dash.tiles.push(moved);
-      else dash.tiles.splice(toIdx, 0, moved);
-
-      dragCustomSlotId = null;
+      if (!dash || !moveByIds(dash.tiles, fromId, toId, t => t.slotId)) return;
       saveCustomDashboards();
-      renderCustomDashboard(dashName);
+      renderCustomDashboard(dashName, true);
     });
   });
 }
@@ -2149,65 +2173,3 @@ document.getElementById('te-delete').addEventListener('click', () => {
     removeCustomTile(dashName, slotId);
     return;
   }
-  const isUserAdded = editingSlot.startsWith('u');
-  if (!confirm(isUserAdded
-    ? 'Remove this tile from the layout?'
-    : 'Hide this tile? (It will be invisible outside edit mode. Use × in edit mode to restore.)')) return;
-
-  if (isUserAdded) {
-    // User-added tile: remove from layout and delete the slot
-    const layout = cfg.layout || JSON.parse(JSON.stringify(LAYOUT_DEFAULTS));
-    for (const ids of Object.values(layout)) {
-      const idx = ids.indexOf(editingSlot);
-      if (idx !== -1) { ids.splice(idx, 1); break; }
-    }
-    cfg.layout = layout;
-    delete cfg.slots[editingSlot];
-  } else {
-    // Fixed slot: just hide it
-    cfg.slots[editingSlot] = { ...(cfg.slots[editingSlot] || {}), kind: 'hidden' };
-  }
-  saveConfigCache();
-  markDirty();
-  buildLayout(); renderAll();
-  tileEditor.classList.remove('open');
-});
-
-// ── Polling and device refresh ────────────────────────────────────────────────
-
-async function refreshDevices() {
-  if (!cfg.hubBaseUrl || !cfg.hubAppId) {
-    return { ok: false, error: 'Hub not configured — enter your Base URL and App ID in settings.' };
-  }
-  if (!cfg.hubToken && !cfg.hubHasToken) {
-    return { ok: false, error: 'Access token not set — paste your Maker API token in the Token field above.' };
-  }
-  try {
-    devices = await api('/devices/all');
-    if (!Array.isArray(devices)) devices = [];
-
-    try {
-      hubModes = await api('/modes') || [];
-      const active = hubModes.find(m => m.active);
-      if (active) window.__currentMode = active.name;
-    } catch {}
-
-    try {
-      const hsm = await api('/hsm');
-      if (hsm && hsm.hsm) window.__hsmState = hsm.hsm;
-    } catch {}
-
-    setConnDot(true);
-    return { ok: true };
-  } catch (e) {
-    setConnDot(false);
-    return { ok: false, error: e.message || String(e) };
-  }
-}
-
-async function refreshAll(force) {
-  const r = await refreshDevices();
-  if (r && r.ok) lastDataAt = Date.now();
-  renderAll(force);
-  updateWsDotTitle();
-}

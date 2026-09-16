@@ -295,13 +295,26 @@
   body.edit-mode .tile,
   body.edit-mode .image-tile { outline: 1px dashed var(--border-mid); outline-offset: -2px; }
 
-  /* Edit mode drag handles */
+  /* Edit mode drag handles.
+     A strip across the bottom of the tile rather than a 12px glyph in the
+     corner: this is the grab target, and on a phone a corner glyph is close to
+     unhittable. It stops short of the right edge so the resize corner stays
+     reachable, and touch-action:none keeps a drag from scrolling the page
+     instead of moving the tile. */
   .tile-drag-handle {
-    position: absolute; bottom: 4px; right: 6px;
-    color: var(--border-mid); font-size: 12px; cursor: grab;
-    display: none; line-height: 1;
+    position: absolute; bottom: 0; left: 0; right: 16px;
+    height: 20px; display: none;
+    align-items: center; justify-content: center;
+    color: var(--border-mid); font-size: 13px; line-height: 1;
+    cursor: grab; touch-action: none;
+    background: linear-gradient(to top, rgba(127,127,127,0.16), transparent);
+    border-bottom-left-radius: var(--radius);
   }
-  body.edit-mode .tile-drag-handle { display: block; }
+  body.edit-mode .tile-drag-handle { display: flex; }
+  .tile-drag-handle:active { cursor: grabbing; }
+  /* The tile being dragged must not intercept elementFromPoint(), or the drop
+     target would always resolve to the tile under the cursor's own ghost. */
+  .tile.dragging, .image-tile.dragging { pointer-events: none; }
   .tile.dragging { opacity: 0.4; }
   .tile.drag-over { outline: 2px dashed var(--info) !important; outline-offset: -2px; }
 
@@ -377,7 +390,8 @@
   body.edit-mode .section > .image-tile .resize-handle,
   body.edit-mode #custom-grid > .image-tile .resize-handle { display: block; z-index: 3; }
   /* Drag handle needs z-index + contrast inside image tiles */
-  .image-tile .tile-drag-handle { z-index: 3; background: rgba(0,0,0,0.55); color: #ccc; border-radius: 2px; padding: 1px 3px; }
+  /* Over a photo the strip needs its own contrast, and z-index to clear the <img>. */
+  .image-tile .tile-drag-handle { z-index: 3; background: rgba(0,0,0,0.55); color: #ccc; border-bottom-left-radius: var(--radius); }
 
   /* Dirty / unsaved badge */
   #dirty-badge {
@@ -1213,7 +1227,7 @@
   <span id="lightbox-label"></span>
 </div>
 
-<!-- hnd-build: f6508ff114 -->
+<!-- hnd-build: a506a0948a -->
 <style>#hub-id-row { display: none !important; }</style>
 <div id="hnd-boot" style="position:fixed;inset:0;z-index:99999;background:#0d1117;color:#e8e8ea;font:14px/1.5 -apple-system,system-ui,sans-serif;padding:24px;overflow:auto">
 <h2 style="margin:0 0 8px">Loading dashboard&hellip;</h2>
@@ -1223,7 +1237,7 @@
 (function () {
   'use strict';
   var PARTS = ["hnd-app-1.js","hnd-app-2.js","hnd-app-3.js"];
-  var VERSION = "f6508ff114";
+  var VERSION = "a506a0948a";
   var token = new URLSearchParams(location.search).get('access_token') || '';
 
   function assetUrl(name) {

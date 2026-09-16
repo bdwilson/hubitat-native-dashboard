@@ -939,6 +939,7 @@ function slotHtml(slotId, sectionId) {
     return `<div class="image-tile${orient}" data-slot="${slotId}" data-section="${sectionId}"${colAttr}${rowAttr}>
       <div class="image-empty">${escapeHtml(s.label || slotId)}</div>
       <span class="image-edit" data-edit="${slotId}">⋮</span>
+      <span class="tile-drag-handle" title="Drag to reorder">⠿</span>
       <div class="resize-handle" data-resize="${slotId}"></div>
     </div>`;
   }
@@ -1021,11 +1022,13 @@ function renderTile(slotId, force) {
             <img src="${escapeHtml(busted)}" alt="">
             <span class="image-label">${escapeHtml(s.label || '')}</span>
             <span class="image-edit" data-edit="${slotId}">⋮</span>
+            <span class="tile-drag-handle" title="Drag to reorder">⠿</span>
             <div class="resize-handle" data-resize="${slotId}"></div>`;
-          // Replacing innerHTML discarded the handle buildLayout() had bound,
-          // so the new one needs its listener. (bindResizeHandle no-ops outside
-          // a .section, which is what keeps camera tiles handle-free.)
+          // Replacing innerHTML discarded the handles buildLayout() had bound,
+          // so the new ones need their listeners. (bindResizeHandle no-ops
+          // outside a .section, which is what keeps camera tiles handle-free.)
           bindResizeHandle(el, slotId);
+          bindDragEvents(el, el.dataset.section || '');
         }
       }
       const imgEl = el.querySelector('img');
@@ -1034,8 +1037,10 @@ function renderTile(slotId, force) {
       el.innerHTML = `
         <div class="image-empty">${escapeHtml(s.label || slotId)} (unmapped)</div>
         <span class="image-edit" data-edit="${slotId}">⋮</span>
+        <span class="tile-drag-handle" title="Drag to reorder">⠿</span>
         <div class="resize-handle" data-resize="${slotId}"></div>`;
       bindResizeHandle(el, slotId);
+      bindDragEvents(el, el.dataset.section || '');
     }
     return;
   }
@@ -1347,15 +1352,3 @@ async function onTileClick(e) {
         if (s.url) {
           if (s.url.startsWith('#')) {
             navigate(s.url.replace(/^#\/?/, '') || 'main');
-          } else if (s.urlNewTab) {
-            window.open(s.url, '_blank');
-          } else {
-            window.location.href = s.url;
-          }
-        } else {
-          openTileEditor(slotId);
-        }
-        return;
-      }
-      case 'image': {
-        // Tap → open lightbox with full-size image
