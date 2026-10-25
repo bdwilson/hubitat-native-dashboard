@@ -192,7 +192,11 @@ The Hub Connection credential inputs are **hidden at runtime by the loader, not 
 | Device access | `/api/hub/<sub-path>` | `hub?path=<url-encoded sub-path>` |
 | Event socket | Worker proxies `/api/hub/events` | browser hits `ws://<hub>/eventsocket` directly |
 | Cloud detection | configured hub URL | `location.hostname` — how the *browser* reached the page |
-| PWA manifest/icons | Worker static assets | stripped (no asset origin; cloud corrupts binaries) |
+| PWA manifest/icons | Worker static assets (binary files) | icons embedded as base64 `data:` URIs; manifest generated in the browser as a `blob:` URL |
+
+**Icons and the PWA manifest.** `head-pwa-links` leaves `HND_ICON_MARKER` (exported from `patches.mjs`) where upstream's manifest/icon links were; `build.mjs` asserts the marker survived and replaces it with `data:` links. Binary files are not an option (cloud corrupts them; no static origin), but base64 is text. Sizing is the constraint: the small icons (~10 KB) go inline, while the two 512px PWA icons (~52 KB base64) would push the shell past the ~118 KB cloud ceiling, so they live in `hnd-icons.json`, listed in `manifest.assets` (distinct from `manifest.chunks`, which are concatenated and `eval`'d — an icons file must never go in that list). The loader fetches it and builds the manifest at runtime because `start_url` must carry the per-install access token. Anything added to `assets` must also be handled by the Groovy installer and integrity check, which read `manifest.assets` — forget that and the self-install button silently skips the file.
+
+PWA *installability* needs a secure context: the cloud link is HTTPS, the local `http://<ip>` link is not, so Chrome offers install only on cloud. Verified against Chrome's manifest parser and `Page.getInstallabilityErrors` in Chromium (no errors beyond the test browser's `in-incognito`); not tested on a phone.
 
 One patch, `import-syncs-all-settings-inputs`, is **not** a transport change — it fixes a real upstream bug. `applyImportedConfig()` syncs only some settings inputs back to the form, so `readSettingsForm()` on the next save reverts title, poll interval, grid columns, tile height and icon scale to their pre-import values. This breaks restore on the Cloudflare build too. The proper fix belongs upstream; if it lands there, this patch will stop matching and the build will say so.
 

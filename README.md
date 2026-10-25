@@ -58,6 +58,18 @@ node build/build.mjs            # sibling checkout, else fetches from GitHub
 node build/build.mjs --source <path-or-url>
 ```
 
+## Home-screen icon and PWA install
+
+The dashboard carries the same icons as the Cloudflare build, so it looks the same pinned to a home screen or in a browser tab.
+
+Hubitat Cloud corrupts binary responses and the hub has no static file origin, so the icons aren't served as files. They're embedded as base64 `data:` URIs, which are text:
+
+- **Tab icon and iOS touch icon** (~10 KB) are inline in the page.
+- **The two 512px PWA icons** (~52 KB as base64) are a separate asset, `hnd-icons.json`. Inline they'd push the page past the ~118 KB cloud ceiling.
+- **The manifest is generated in the browser**, not shipped as a file. Its `start_url` has to carry *this* install's access token, which differs per hub and isn't known until the page is open; a static manifest would install an app that opens to a 401. Its `id` is the URL path rather than the full URL, so rotating the token doesn't make the browser see a different app.
+
+Verified in Chromium against Chrome's own manifest parser: no parse errors, token in `start_url`, all icons decode. The one installability message was `in-incognito`, an artefact of the test browser. **Not verified on a phone**, and not on a real hub, where the HTTPS caveat under Known limits applies.
+
 ## Per-browser layouts
 
 The settings panel has **"Where this dashboard's layout is stored"**:
@@ -198,7 +210,7 @@ The last row is the important one: the app was rewritten substantially (asset se
 - **~128 KB per cloud response.** A large `/devices/all` can exceed this — 141 devices with full attributes is close. It works fine on the local link; on cloud it truncates or fails. The app logs a warning naming the response that went over, because otherwise this shows up as a silently empty dashboard.
 - **Real-time updates are local-only.** The dashboard connects straight to the hub's `ws://<hub>/eventsocket` on the local link — one hop fewer than the Cloudflare build, which has to proxy it. Over the cloud link there is no event socket, so it polls. Same limitation the Cloudflare build has.
 - **App `state` is not unlimited.** Config is capped at 90 KB here; `PUT config` returns a clear 413 rather than letting a too-large write fail obscurely. Many custom dashboards with many tiles could approach it.
-- **No PWA icons.** The build strips the manifest and icon links: there is no static asset origin on the hub, and Hubitat Cloud corrupts binary responses. Installing to a home screen works; it just gets a default icon.
+- **PWA install needs HTTPS.** The icons and manifest are in (see below), but browsers only offer to *install* a web app from a secure context. The **cloud** link (`https://cloud.hubitat.com/...`) qualifies. The **local** link is plain `http://<hub-ip>/...`, which Chrome will not offer to install; it will still offer *Add to Home Screen* as a shortcut. iOS Safari's *Add to Home Screen* works over either, using the embedded touch icon.
 - **Security is the URL.** Anyone with a dashboard link can control every device exposed through your Maker API instance — the same trust model as Maker API's own URLs. There is no per-user identity here, unlike Cloudflare Access in front of the production dashboard.
 
 ## Trade-offs versus reimplementing device access natively

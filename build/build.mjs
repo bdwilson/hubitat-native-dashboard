@@ -30,7 +30,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { applyPatches, applyRelabels, checkGuards } from './patches.mjs';
+import { applyPatches, applyRelabels, checkGuards, HND_ICON_MARKER } from './patches.mjs';
 
 const APP_SOURCE = 'app/HubitatNativeDashboard.groovy';
 
@@ -84,6 +84,20 @@ async function resolveSource(explicit) {
   if (existsSync(SIBLING_CHECKOUT)) return { kind: 'file', at: SIBLING_CHECKOUT };
   return { kind: 'url', at: UPSTREAM_RAW };
 }
+
+/**
+ * Fetch one of upstream's icon files, from wherever the HTML itself came from:
+ * src/assets/icons/<name> sits next to src/assets/index.html.
+ */
+async function loadIcon(src, name) {
+  if (src.kind === 'file') return readFile(path.join(path.dirname(src.at), 'icons', name));
+  const url = src.at.replace(/index\.html(\?.*)?$/, `icons/${name}`);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`fetching icon ${url} failed: HTTP ${res.status}. Pass --source with a local checkout instead.`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+const dataUri = (buf) => `data:image/png;base64,${buf.toString('base64')}`;
 
 async function loadSource(src) {
   if (src.kind === 'file') return readFile(src.at, 'utf8');
@@ -152,13 +166,14 @@ function chunkByLines(text, maxBytes) {
  * and the browser still parses exactly the original program — and, unlike
  * wrapping each chunk in a string literal, it costs zero bytes of escaping.
  */
-function buildLoader(chunkNames, version) {
+function buildLoader(chunkNames, version, iconsFile) {
   const list = JSON.stringify(chunkNames);
   return `<script>
 (function () {
   'use strict';
   var PARTS = ${list};
   var VERSION = ${JSON.stringify(version)};
+  var ICONS = ${JSON.stringify(iconsFile)};
   var token = new URLSearchParams(location.search).get('access_token') || '';
 
   function assetUrl(name) {
@@ -329,6 +344,50 @@ function buildLoader(chunkNames, version) {
       });
   }
 
+  // PWA manifest, built at runtime from the icons asset.
+  //
+  // It cannot be a static file. start_url has to carry THIS install's access
+  // token, which differs per hub and is only known once the page is open — a
+  // static manifest would install an app that opens to a 401. It is handed to the
+  // browser as a blob: URL for the same reason, and because the hub has no
+  // static origin to serve one from. Failure here must never break the
+  // dashboard, so every step is allowed to just not happen.
+  function installPwaManifest() {
+    try {
+      fetch(assetUrl(ICONS)).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(function (icons) {
+        var here = new URL(location.href);
+        // Identity is the path, not the URL: a rotated access token changes the
+        // query string and must not look like a different app to the browser.
+        var manifest = {
+          id: here.pathname,
+          name: document.title || 'Hubitat Dashboard',
+          short_name: 'Hubitat',
+          start_url: here.href,
+          scope: new URL('./', here).href,
+          display: 'standalone',
+          background_color: '#000000',
+          theme_color: '#0d1117',
+          icons: [
+            { src: icons.any, sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: icons.maskable, sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+          ]
+        };
+        var url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' }));
+        var link = document.querySelector('link[rel="manifest"]') || document.createElement('link');
+        link.rel = 'manifest';
+        link.href = url;
+        if (!link.parentNode) document.head.appendChild(link);
+      }).catch(function (e) {
+        console.warn('PWA manifest skipped', e);
+      });
+    } catch (e) {
+      console.warn('PWA manifest skipped', e);
+    }
+  }
+
   function installConfigModeUi() {
     try {
       var local = isLocalMode();
@@ -440,6 +499,7 @@ function buildLoader(chunkNames, version) {
     (0, eval)(texts.join('\\n'));
     hideHubConnectionFields();
     installConfigModeUi();
+    installPwaManifest();
   }).catch(function (e) {
     fail('Could not load the dashboard code from the hub.', e && e.message);
   });
@@ -499,7 +559,27 @@ async function main() {
         : ''),
   );
 
-  const { head, js, tail } = splitShellAndScript(patched);
+  // Icons. The small ones go inline in the shell as data: URIs (browser tab,
+  // iOS home screen); the two 512px PWA icons are ~53 KB as base64, which would
+  // push the shell past the cloud response ceiling, so they live in their own
+  // asset that the loader fetches to build the manifest. All of it is text, so
+  // Hubitat Cloud cannot corrupt it the way it corrupts binary responses.
+  if (!patched.includes(HND_ICON_MARKER)) {
+    throw new Error(`icon marker ${HND_ICON_MARKER} missing after patching; the head-pwa-links patch changed.`);
+  }
+  const [fav16, fav32, touch180, icon512, iconMaskable] = await Promise.all(
+    ['favicon-16x16.png', 'favicon-32x32.png', 'apple-touch-icon.png', 'icon-512.png', 'icon-512-maskable.png']
+      .map((n) => loadIcon(src, n)),
+  );
+  const iconLinks =
+    `<link rel="icon" type="image/png" sizes="32x32" href="${dataUri(fav32)}">\n` +
+    `<link rel="icon" type="image/png" sizes="16x16" href="${dataUri(fav16)}">\n` +
+    `<link rel="apple-touch-icon" href="${dataUri(touch180)}">`;
+  const iconsJson = JSON.stringify({ any: dataUri(icon512), maskable: dataUri(iconMaskable) });
+  const ICONS_FILE = 'hnd-icons.json';
+
+  const { head: headRaw, js, tail } = splitShellAndScript(patched);
+  const head = headRaw.replace(HND_ICON_MARKER, iconLinks);
 
   const chunkMax = Math.floor(args.chunkKb * 1024);
   const chunks = chunkByLines(js, chunkMax);
@@ -515,7 +595,9 @@ async function main() {
     .update(patched)
     .update(BOOT_NOTICE)
     .update(NATIVE_STYLE)
-    .update(buildLoader(chunkNames, '__VERSION__'))
+    .update(iconLinks)
+    .update(iconsJson)
+    .update(buildLoader(chunkNames, '__VERSION__', ICONS_FILE))
     .digest('hex')
     .slice(0, 10);
 
@@ -526,7 +608,7 @@ async function main() {
   // that half works. The loader's VERSION is the same value, but it lives in JS
   // the Groovy side has no business parsing.
   const stamp = `<!-- hnd-build: ${version} -->`;
-  const shell = `${head}\n${stamp}\n${NATIVE_STYLE}\n${BOOT_NOTICE}\n${buildLoader(chunkNames, version)}\n${tail}`;
+  const shell = `${head}\n${stamp}\n${NATIVE_STYLE}\n${BOOT_NOTICE}\n${buildLoader(chunkNames, version, ICONS_FILE)}\n${tail}`;
 
   const outDir = path.resolve(REPO_ROOT, args.out);
 
@@ -544,7 +626,7 @@ async function main() {
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
-  const files = [['hnd-shell.html', shell], ...chunkNames.map((n, i) => [n, chunks[i]])];
+  const files = [['hnd-shell.html', shell], ...chunkNames.map((n, i) => [n, chunks[i]]), [ICONS_FILE, iconsJson]];
   for (const [name, content] of files) {
     await writeFile(path.join(outDir, name), content, 'utf8');
   }
@@ -570,6 +652,7 @@ async function main() {
     builtAt,
     shell: 'hnd-shell.html',
     chunks: chunkNames,
+    assets: [ICONS_FILE],
     patches: applied,
     relabels: relabelCounts.filter((c) => c.hits > 0).length,
     bytes: Object.fromEntries(files.map(([n, c]) => [n, Buffer.byteLength(c, 'utf8')])),
