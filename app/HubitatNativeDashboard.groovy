@@ -59,7 +59,7 @@ preferences {
 // Bump when this file changes in a way users should know about. Surfaced on the
 // settings page and by the `status` route so an installed app can be identified
 // without diffing source.
-private String appVersion() { "1.2.0" }
+private String appVersion() { "1.2.1" }
 
 private String shellFileName() { "hnd-shell.html" }
 private String manifestFileName() { "hnd-manifest.json" }
@@ -320,7 +320,7 @@ private Map updateStatus(Boolean force = false) {
         return [checked: false, message: "Not checked yet."]
     }
 
-    def raw = httpGetText("${uiSourceUrl()}/${manifestFileName()}")
+    def raw = httpGetText(bustCache("${uiSourceUrl()}/${manifestFileName()}", now()))
     if (!raw) {
         def result = [checked: true, ok: false,
                       message: "Could not reach ${uiSourceUrl()} to check for updates."]
@@ -773,37 +773,31 @@ def installUiFiles() {
     }
 
     def base = uiSourceUrl()
-    def manifestRaw = httpGetText("${base}/${manifestFileName()}")
-    if (!manifestRaw) {
-        return [ok: false, message: "Could not fetch ${manifestFileName()} from ${base} — check the URL and that this hub has internet access."]
+
+    // Download the WHOLE set and prove it is one build before writing anything.
+    // raw.githubusercontent.com caches each URL independently for a few minutes,
+    // so right after a merge it can serve the new shell next to the previous
+    // build's manifest. Writing files as they arrive (the original behaviour)
+    // turned that into a hub holding two builds that still reported itself as
+    // healthy. A failed attempt is retried once, with fresh cache keys.
+    def set = fetchUiSet(base)
+    if (!set.ok && set.retryable) {
+        log.warn "UI download was inconsistent (${set.message}); retrying once with fresh cache keys"
+        pauseExecution(3000)
+        set = fetchUiSet(base)
     }
+    if (!set.ok) return [ok: false, message: set.message]
 
-    def manifest
-    try {
-        manifest = new groovy.json.JsonSlurper().parseText(manifestRaw)
-    } catch (e) {
-        return [ok: false, message: "${manifestFileName()} from ${base} is not valid JSON: ${e.message}"]
-    }
-
-    def wanted = [manifestFileName(), (manifest?.shell ?: shellFileName()).toString()]
-    if (manifest?.chunks instanceof List) wanted.addAll(manifest.chunks*.toString())
-    // Non-JS files the loader fetches (currently the PWA icons). Same install path.
-    if (manifest?.assets instanceof List) wanted.addAll(manifest.assets*.toString())
-
+    // Write the manifest LAST. Everything else is already verified against it, so
+    // if a write fails part-way the hub is left with a manifest that still names
+    // the previous build, which the integrity check flags — rather than a
+    // manifest vouching for files that never arrived.
+    def order = set.files.keySet().findAll { it != manifestFileName() } + [manifestFileName()]
     def installed = []
     def failed = []
-    wanted.unique().each { name ->
-        if (!(name ==~ assetNamePattern())) {
-            failed << "${name} (unexpected file name)"
-            return
-        }
-        def body = (name == manifestFileName()) ? manifestRaw : httpGetText("${base}/${name}")
-        if (!body) {
-            failed << "${name} (download failed)"
-            return
-        }
+    order.each { name ->
         try {
-            uploadHubFile(name, body.getBytes("UTF-8"))
+            uploadHubFile(name, set.files[name].getBytes("UTF-8"))
             installed << name
         } catch (e) {
             failed << "${name} (${e.message})"
@@ -816,7 +810,91 @@ def installUiFiles() {
     if (failed) {
         return [ok: false, message: "Installed ${installed.size()} file(s); failed: ${failed.join('; ')}"]
     }
-    return [ok: true, message: "Installed ${installed.size()} file(s) for build ${manifest?.version ?: 'unknown'}: ${installed.join(', ')}"]
+    return [ok: true, message: "Installed ${installed.size()} file(s) for build ${set.manifest?.version ?: 'unknown'}: ${installed.join(', ')}"]
+}
+
+// Download every file the source's manifest names, with one shared cache-busting
+// value, and report whether the set is internally consistent. Writes nothing.
+private Map fetchUiSet(String base) {
+    def cb = now()
+    def manifestRaw = httpGetText(bustCache("${base}/${manifestFileName()}", cb))
+    if (!manifestRaw) {
+        return [ok: false, retryable: false,
+                message: "Could not fetch ${manifestFileName()} from ${base} — check the URL and that this hub has internet access."]
+    }
+
+    def manifest
+    try {
+        manifest = new groovy.json.JsonSlurper().parseText(manifestRaw)
+    } catch (e) {
+        return [ok: false, retryable: true,
+                message: "${manifestFileName()} from ${base} is not valid JSON: ${e.message}"]
+    }
+
+    def names = [(manifest?.shell ?: shellFileName()).toString()]
+    if (manifest?.chunks instanceof List) names.addAll(manifest.chunks*.toString())
+    // Non-JS files the loader fetches (currently the PWA icons). Same install path.
+    if (manifest?.assets instanceof List) names.addAll(manifest.assets*.toString())
+
+    def files = [(manifestFileName()): manifestRaw]
+    def fetchFailures = []
+    names.unique().each { name ->
+        if (!(name ==~ assetNamePattern())) {
+            fetchFailures << "${name} (unexpected file name)"
+            return
+        }
+        def body = httpGetText(bustCache("${base}/${name}", cb))
+        if (!body) {
+            fetchFailures << "${name} (download failed)"
+            return
+        }
+        files[name] = body
+    }
+    if (fetchFailures) {
+        return [ok: false, retryable: true, message: "Could not download: ${fetchFailures.join('; ')}"]
+    }
+
+    def problems = uiSetProblems(manifest, files)
+    if (problems) {
+        return [ok: false, retryable: true,
+                message: "The source served files from different builds, so nothing was installed " +
+                    "(this hub is unchanged). ${problems.join('; ')}. This usually clears within a few " +
+                    "minutes of a new release while GitHub's cache catches up — try again shortly."]
+    }
+    return [ok: true, manifest: manifest, files: files]
+}
+
+// Is this downloaded set one coherent build? Pure — no I/O — so it can be
+// exercised on its own. Checks each file's UTF-8 size against the manifest, and
+// that the shell's own build stamp matches the manifest's version: the two
+// checks that distinguish "one build" from "files that merely all exist".
+private List uiSetProblems(Map manifest, Map files) {
+    def problems = []
+    def sizes = (manifest?.bytes instanceof Map) ? manifest.bytes : [:]
+    def version = (manifest?.version ?: "").toString()
+
+    files.each { name, body ->
+        if (name == manifestFileName()) return
+        def expected = sizes[name]
+        if (expected instanceof Number && byteLength(body) != (expected as Integer)) {
+            problems << "${name} is ${byteLength(body)} bytes but the manifest says ${expected}"
+        }
+    }
+
+    def shellName = (manifest?.shell ?: shellFileName()).toString()
+    def stamp = files[shellName] ? shellBuildStamp(files[shellName]) : null
+    if (version && stamp && stamp != version) {
+        problems << "${shellName} is from build ${stamp} but the manifest is build ${version}"
+    }
+    return problems
+}
+
+// Append a cache-busting query parameter. raw.githubusercontent.com keys its
+// cache on the full URL including the query string, so a fresh value forces a
+// fresh read from the origin. Harmless to any other host (a LAN web server just
+// ignores it).
+private String bustCache(String url, Long cb) {
+    url + (url.contains("?") ? "&" : "?") + "cb=" + cb
 }
 
 // Plain text fetch used only by the installer, for an external URL rather than
