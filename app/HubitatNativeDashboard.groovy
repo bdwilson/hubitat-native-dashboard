@@ -59,7 +59,7 @@ preferences {
 // Bump when this file changes in a way users should know about. Surfaced on the
 // settings page and by the `status` route so an installed app can be identified
 // without diffing source.
-private String appVersion() { "1.1.0" }
+private String appVersion() { "1.2.0" }
 
 private String shellFileName() { "hnd-shell.html" }
 private String manifestFileName() { "hnd-manifest.json" }
@@ -103,9 +103,11 @@ def mainPage() {
             } else if (!upd.ok) {
                 paragraph "<b style='color:#c62828'>Update check failed.</b> ${upd.message}"
             } else if (upd.upToDate) {
-                paragraph "<b style='color:#2e7d32'>Up to date.</b> ${upd.message}"
+                // upd.message already opens with "Up to date", so it is the label itself.
+                paragraph "<b style='color:#2e7d32'>${upd.message}</b>"
             } else {
-                paragraph "<b style='color:#ef6c00'>Update available.</b> ${upd.message}" +
+                // Likewise "Update available: installed X, available Y".
+                paragraph "<b style='color:#ef6c00'>${upd.message}</b>" +
                     (upd.builtAt ? "<br><span style='font-size:12px'>Built ${upd.builtAt}</span>" : "")
             }
             input "checkUpdates", "button", title: "Check for updates"
@@ -237,6 +239,7 @@ private Map assetStatusUncached() {
 
     def version = (m?.version ?: "unknown").toString()
     def chunks = (m?.chunks instanceof List) ? m.chunks*.toString() : []
+    def assets = (m?.assets instanceof List) ? m.assets*.toString() : []
     def sizes = (m?.bytes instanceof Map) ? m.bytes : [:]
 
     def problems = []
@@ -248,7 +251,7 @@ private Map assetStatusUncached() {
         problems << "${shellFileName()} has no build stamp (built by an older version of build.mjs)"
     }
 
-    ([shellFileName()] + chunks).each { name ->
+    ([shellFileName()] + chunks + assets).each { name ->
         def expected = sizes[name]
         def actual = (name == shellFileName()) ? byteLength(shell) : assetByteLength(name)
         if (actual == 0) {
@@ -263,7 +266,7 @@ private Map assetStatusUncached() {
                 message: "Build ${version} has problems: ${problems.join('; ')}."]
     }
     return [ok: true, installedVersion: version,
-            message: "Build ${version}, ${chunks.size()} JS chunk(s), all present and the expected size."]
+            message: "Build ${version}, ${chunks.size()} JS chunk(s)${assets ? " + ${assets.size()} asset(s)" : ""}, all present and the expected size."]
 }
 
 private String shellBuildStamp(String shell) {
@@ -784,6 +787,8 @@ def installUiFiles() {
 
     def wanted = [manifestFileName(), (manifest?.shell ?: shellFileName()).toString()]
     if (manifest?.chunks instanceof List) wanted.addAll(manifest.chunks*.toString())
+    // Non-JS files the loader fetches (currently the PWA icons). Same install path.
+    if (manifest?.assets instanceof List) wanted.addAll(manifest.assets*.toString())
 
     def installed = []
     def failed = []

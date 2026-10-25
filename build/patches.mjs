@@ -21,22 +21,25 @@
 const TOKEN_EXPR =
   "encodeURIComponent(new URLSearchParams(location.search).get('access_token') || '')";
 
+/** build.mjs replaces this with the embedded icon links; it asserts it is present. */
+export const HND_ICON_MARKER = '<!--HND_ICON_LINKS-->';
+
 export const PATCHES = [
   {
     name: 'head-pwa-links',
     why:
-      'The manifest and icon files live in the Worker\'s static assets. There is no ' +
-      'equivalent on the hub — and Hubitat Cloud corrupts binary responses, so serving ' +
-      'PNGs through the app is not an option either. Dropping them costs the custom ' +
-      'PWA icon and nothing else.',
+      'Upstream links a manifest and icons that live in the Worker\'s static assets, ' +
+      'served as binary files. The hub has no static origin, and Hubitat Cloud ' +
+      'corrupts binary responses, so those links cannot work as written. They are ' +
+      'replaced by a marker that build.mjs fills with the same icons embedded as ' +
+      'base64 data: URIs — text, so the cloud proxy cannot corrupt them.',
     count: 1,
     find: `<link rel="manifest" href="/manifest.json">
 <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32x32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16x16.png">
 <link rel="shortcut icon" href="/icons/favicon.ico">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">`,
-    replace: `<!-- PWA manifest/icons removed by hubitat-native-dashboard build:
-     no static asset origin on the hub, and Hubitat Cloud corrupts binary responses. -->`,
+    replace: HND_ICON_MARKER,
   },
 
   {

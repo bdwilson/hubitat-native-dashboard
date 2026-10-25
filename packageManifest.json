@@ -1,12 +1,12 @@
 {
   "packageName": "Hubitat Native Dashboard",
   "author": "Brian Wilson",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minimumHEVersion": "0.0",
   "documentationLink": "https://github.com/bdwilson/hubitat-native-dashboard",
   "communityLink": "",
-  "dateReleased": "2026-09-14",
-  "releaseNotes": "First release. Serves the cf-hubitat-dashboard frontend from the hub itself, wrapping an existing Maker API instance. The dashboard UI is installed by the app's own \"Install / update dashboard UI\" button, not by this package.",
+  "dateReleased": "2026-10-25",
+  "releaseNotes": "Restores the favicon and PWA icons (embedded in the page, so they survive Hubitat Cloud). IMPORTANT: update this app first, then click \"Install / update dashboard UI\" - the installer in older versions does not fetch the new icons file. Also fixes duplicated text in the update-status line.",
   "apps": [
     {
       "id": "20ba4d1c-f8f6-4eb1-b546-1ce5e9eb8b39",
@@ -15,7 +15,7 @@
       "location": "https://raw.githubusercontent.com/bdwilson/hubitat-native-dashboard/main/app/HubitatNativeDashboard.groovy",
       "required": true,
       "oauth": true,
-      "version": "1.0.0"
+      "version": "1.1.0"
     }
   ]
 }

@@ -1,12 +1,15 @@
 {
-  "version": "a506a0948a",
+  "version": "485981cc9f",
   "upstreamSha256": "2ee650ff79fe",
-  "builtAt": "2026-09-16T00:34:59.546Z",
+  "builtAt": "2026-10-25T19:11:32.793Z",
   "shell": "hnd-shell.html",
   "chunks": [
     "hnd-app-1.js",
     "hnd-app-2.js",
     "hnd-app-3.js"
+  ],
+  "assets": [
+    "hnd-icons.json"
   ],
   "patches": [
     "head-pwa-links",
@@ -26,9 +29,10 @@
   ],
   "relabels": 17,
   "bytes": {
-    "hnd-shell.html": 69851,
+    "hnd-shell.html": 81623,
     "hnd-app-1.js": 98287,
     "hnd-app-2.js": 98254,
-    "hnd-app-3.js": 44479
+    "hnd-app-3.js": 44479,
+    "hnd-icons.json": 53080
   }
 }
